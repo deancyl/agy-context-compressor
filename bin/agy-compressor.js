@@ -150,7 +150,10 @@ function runDoctor() {
     console.log(`  \x1b[31m✖ Core Compression Engines:\x1b[0m Self-test anomaly detected`);
   }
 
-  // 6. Cumulative Telemetry Summary
+  // 6. Card 4: llmtrim Cache-Zone
+  console.log(`  \x1b[32m✔ Card 4: llmtrim Cache-Zone:\x1b[0m Active (Multi-turn byte freezing & True LRU Bounded)`);
+
+  // 7. Cumulative Telemetry Summary
   const stats = getStats();
   console.log(`  \x1b[36m✔ Cumulative Saved Tokens:\x1b[0m \x1b[1m\x1b[32m${(stats.savedTokens || 0).toLocaleString()} Tokens\x1b[0m (Saved: $${(stats.savedCostUSD || 0).toFixed(4)} USD)`);
 

@@ -7,6 +7,7 @@ const { stripAnsi, cleanProgressBars, foldTestPasses, cleanDockerOutput, cleanTe
 const { foldLockfiles, foldStructuredData } = require('./headroom');
 const { alignToolsSchema, slimToolsSchema } = require('./schema');
 const { cleanPowerShellNoise, fixPowerShellCommandEscaping } = require('./powershell');
+const { getMemo, setMemo, hashContent } = require('./cache-zone');
 const { recordSavings, getStats } = require('./telemetry');
 
 const COMPACTOR_PRESETS = {
@@ -77,11 +78,22 @@ function resolveOptions(options = {}) {
  * Compacts terminal or command text output.
  * @param {string} text
  * @param {object} userOptions
+ * @param {string|null} [sessionId=null]
  * @returns {string}
  */
-function compactOutput(text, userOptions = {}) {
+function compactOutput(text, userOptions = {}, sessionId = null) {
   if (typeof text !== 'string' || text.length === 0) return text;
   const opts = resolveOptions(userOptions);
+
+  let cacheKey = null;
+  if (sessionId && opts.cacheZoneFreeze !== false) {
+    cacheKey = hashContent(text);
+    const cached = getMemo(sessionId, cacheKey);
+    if (cached !== null) {
+      return cached;
+    }
+  }
+
   const originalLength = text.length;
 
   let result = text;
@@ -133,6 +145,10 @@ function compactOutput(text, userOptions = {}) {
     recordSavings('headroom', headroomDelta, beforeHeadroom);
   }
 
+  if (sessionId && cacheKey && opts.cacheZoneFreeze !== false) {
+    setMemo(sessionId, cacheKey, result);
+  }
+
   return result;
 }
 
@@ -151,5 +167,7 @@ module.exports = {
   slimToolsSchema,
   cleanPowerShellNoise,
   fixPowerShellCommandEscaping,
-  getStats
+  getMemo,
+  setMemo,
+  hashContent,
 };

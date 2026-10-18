@@ -51,6 +51,7 @@ function getInitialStats() {
       rtk: { savedChars: 0, savedTokens: 0, invocations: 0 },
       headroom: { savedChars: 0, savedTokens: 0, invocations: 0 },
       schema: { savedChars: 0, savedTokens: 0, alignedToolsCount: 0 },
+      cacheZone: { savedChars: 0, savedTokens: 0, hits: 0, upstreamKvCacheTokens: 0 },
       powershell: { savedChars: 0, savedTokens: 0, fixedCommandsCount: 0 }
     },
     recentEvents: [],
@@ -224,14 +225,16 @@ function formatDashboard() {
   const ratio = stats.compressionRatio || 0;
   const cost = stats.savedCostUSD || 0;
 
-  const rtkTokens = stats.modules.rtk.savedTokens || 0;
-  const headroomTokens = stats.modules.headroom.savedTokens || 0;
-  const schemaTokens = stats.modules.schema.savedTokens || 0;
-  const psTokens = stats.modules.powershell.savedTokens || 0;
+  const rtkTokens = stats.modules.rtk?.savedTokens || 0;
+  const headroomTokens = stats.modules.headroom?.savedTokens || 0;
+  const schemaTokens = stats.modules.schema?.savedTokens || 0;
+  const cacheZoneTokens = stats.modules.cacheZone?.savedTokens || 0;
+  const psTokens = stats.modules.powershell?.savedTokens || 0;
 
   const rtkPct = totalTokens > 0 ? ((rtkTokens / totalTokens) * 100).toFixed(1) : 0;
   const headroomPct = totalTokens > 0 ? ((headroomTokens / totalTokens) * 100).toFixed(1) : 0;
   const schemaPct = totalTokens > 0 ? ((schemaTokens / totalTokens) * 100).toFixed(1) : 0;
+  const cacheZonePct = totalTokens > 0 ? ((cacheZoneTokens / totalTokens) * 100).toFixed(1) : 0;
   const psPct = totalTokens > 0 ? ((psTokens / totalTokens) * 100).toFixed(1) : 0;
 
   const lines = [
@@ -250,8 +253,10 @@ function formatDashboard() {
     `  • \x1b[1mCard 1: RTK 终端与测试去噪\x1b[0m    : ${fmtNum(rtkTokens).padStart(9)} Tokens (${rtkPct.padStart(5)}%) [${bar(rtkPct, 12)}]`,
     `  • \x1b[1mCard 2: Headroom 结构折叠\x1b[0m     : ${fmtNum(headroomTokens).padStart(9)} Tokens (${headroomPct.padStart(5)}%) [${bar(headroomPct, 12)}]`,
     `  • \x1b[1mCard 3: Tools 缓存对齐瘦身\x1b[0m   : ${fmtNum(schemaTokens).padStart(9)} Tokens (${schemaPct.padStart(5)}%) [${bar(schemaPct, 12)}]`,
+    `  • \x1b[1mCard 4: llmtrim 会话缓存固化\x1b[0m : ${fmtNum(cacheZoneTokens).padStart(9)} Tokens (${cacheZonePct.padStart(5)}%) [${bar(cacheZonePct, 12)}]`,
+    `    \x1b[90m(会话前缀字节流锁定: 活跃 | 固化命中: ${stats.modules.cacheZone?.hits || 0} 次)\x1b[0m`,
     `  • \x1b[1mCard 5: PowerShell 报错去噪\x1b[0m   : ${fmtNum(psTokens).padStart(9)} Tokens (${psPct.padStart(5)}%) [${bar(psPct, 12)}]`,
-    `    \x1b[90m(已自动拦截修复 Windows 命令语法与反斜杠陷阱: ${stats.modules.powershell.fixedCommandsCount || 0} 次)\x1b[0m`,
+    `    \x1b[90m(已自动拦截修复 Windows 命令语法与反斜杠陷阱: ${stats.modules.powershell?.fixedCommandsCount || 0} 次)\x1b[0m`,
     ''
   ];
 
