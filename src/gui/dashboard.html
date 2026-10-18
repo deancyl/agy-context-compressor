@@ -221,17 +221,22 @@
     <!-- Hero Metrics -->
     <div class="hero-grid">
       <div class="metric-card">
-        <div class="metric-title">累计节省 Token 数 <span>🎯</span></div>
+        <div class="metric-title">全会话总处理 Token 体量 <span>🌐</span></div>
+        <div id="totalContextTokens" class="metric-value">0</div>
+        <div id="totalContextSub" class="metric-sub">涵盖历史轮次摄入与模型深度思考链</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Google 原厂 KV Cache 锁定 <span>🔒</span></div>
+        <div id="kvCacheTokens" class="metric-value">0</div>
+        <div id="kvCacheSub" class="metric-sub">Prompt Cache 命中率 0.0%</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">终端与结构去噪精简 <span>🎯</span></div>
         <div id="savedTokens" class="metric-value">0</div>
         <div id="savedTokensSub" class="metric-sub">折合输入 Token 消耗减免</div>
       </div>
       <div class="metric-card">
-        <div class="metric-title">累计精简字符体积 <span>📦</span></div>
-        <div id="savedChars" class="metric-value">0 B</div>
-        <div id="savedCharsSub" class="metric-sub">已阻断 0 chars 冗余流向大模型</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-title">综合平均压缩率 <span>⚡</span></div>
+        <div class="metric-title">综合上下文配额防护率 <span>⚡</span></div>
         <div id="compressionRatio" class="metric-value">0.0%</div>
         <div class="progress-bar-bg">
           <div id="ratioBar" class="progress-bar-fill"></div>
@@ -335,13 +340,23 @@
         const res = await fetch('/api/stats');
         const data = await res.json();
 
-        document.getElementById('savedTokens').innerText = (data.savedTokens || 0).toLocaleString();
-        document.getElementById('savedChars').innerText = fmtBytes(data.totalSavedChars || 0);
-        document.getElementById('savedCharsSub').innerText = `已阻断 ${(data.totalSavedChars || 0).toLocaleString()} 字符冗余写入上下文`;
+        const ctx = data.contextMetrics || {};
+        const totalCtx = ctx.totalContextProcessed || data.totalOriginalChars || 0;
+        const kvTokens = ctx.totalCacheReadTokens || 0;
+        const kvRatio = ctx.kvCacheHitRatio || 0;
 
-        const ratio = data.compressionRatio || 0;
-        document.getElementById('compressionRatio').innerText = ratio + '%';
-        document.getElementById('ratioBar').style.width = Math.min(100, ratio) + '%';
+        document.getElementById('totalContextTokens').innerText = totalCtx.toLocaleString();
+        document.getElementById('totalContextSub').innerText = `涵盖 ${ctx.plannerResponsesCount || 0} 轮轨迹、思考链与工具输出`;
+
+        document.getElementById('kvCacheTokens').innerText = kvTokens.toLocaleString();
+        document.getElementById('kvCacheSub').innerText = `Prompt Cache 锁定 | 命中率 ${kvRatio}%`;
+
+        document.getElementById('savedTokens').innerText = (data.savedTokens || 0).toLocaleString();
+        document.getElementById('savedTokensSub').innerText = `阻断 ${fmtBytes(data.totalSavedChars || 0)} (${(data.totalSavedChars || 0).toLocaleString()} 字符)`;
+
+        const displayRatio = kvRatio > 0 ? kvRatio : (data.compressionRatio || 0);
+        document.getElementById('compressionRatio').innerText = displayRatio + '%';
+        document.getElementById('ratioBar').style.width = Math.min(100, displayRatio) + '%';
         document.getElementById('savedCost').innerText = '$' + (data.savedCostUSD || 0).toFixed(4);
 
         // Modules

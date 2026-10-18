@@ -54,7 +54,8 @@ test('formatDashboard: renders clean colorized dashboard without throwing', () =
 
   const dashboard = formatDashboard();
   assert.ok(dashboard.includes('Google Antigravity - Context Compression Dashboard'));
-  assert.ok(dashboard.includes('累计节省 Token 数'));
+  assert.ok(dashboard.includes('全会话处理上下文总体量'));
+  assert.ok(dashboard.includes('终端与结构去噪直接节省'));
   assert.ok(dashboard.includes('Card 1: RTK'));
   assert.ok(dashboard.includes('Card 2: Headroom'));
   assert.ok(dashboard.includes('Card 3: Tools'));

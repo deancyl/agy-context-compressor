@@ -159,7 +159,60 @@ function analyzeTranscriptCache(transcriptPath) {
     // Safe return fallback
   }
 
+  result.totalContextProcessed = result.totalInputTokens + result.totalCacheReadTokens + result.totalOutputTokens;
   return result;
+}
+
+/**
+ * Automatically discovers the most recently updated Antigravity conversation transcript.
+ * @returns {string|null}
+ */
+function findLatestTranscriptPath() {
+  try {
+    const brainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
+    if (!fs.existsSync(brainDir)) return null;
+    const entries = fs.readdirSync(brainDir);
+    let latestPath = null;
+    let latestMtime = 0;
+    for (const entry of entries) {
+      const p = path.join(brainDir, entry, '.system_generated', 'logs', 'transcript.jsonl');
+      if (fs.existsSync(p)) {
+        try {
+          const mtime = fs.statSync(p).mtimeMs;
+          if (mtime > latestMtime) {
+            latestMtime = mtime;
+            latestPath = p;
+          }
+        } catch (_) {}
+      }
+    }
+    return latestPath;
+  } catch (_) {
+    return null;
+  }
+}
+
+let lastLiveMetrics = null;
+let lastLiveMetricsTime = 0;
+
+/**
+ * Gets live Antigravity context and Prompt Cache metrics with a 2-second debounce cache.
+ * @param {string|null} [customTranscriptPath=null]
+ * @returns {object}
+ */
+function getLiveAntigravityMetrics(customTranscriptPath = null) {
+  const now = Date.now();
+  if (!customTranscriptPath && lastLiveMetrics && (now - lastLiveMetricsTime < 2000)) {
+    return lastLiveMetrics;
+  }
+  const transcriptPath = customTranscriptPath || findLatestTranscriptPath();
+  const metrics = analyzeTranscriptCache(transcriptPath);
+  metrics.transcriptPath = transcriptPath;
+  if (!customTranscriptPath) {
+    lastLiveMetrics = metrics;
+    lastLiveMetricsTime = now;
+  }
+  return metrics;
 }
 
 /**
@@ -170,8 +223,6 @@ function analyzeTranscriptCache(transcriptPath) {
  * @returns {object}
  */
 function handlePreInvocation(payload) {
-  // PreInvocation hook contract allows returning injectSteps
-  // We guarantee fail-safe empty array or ephemeral guidance
   return {
     injectSteps: []
   };
@@ -184,6 +235,8 @@ module.exports = {
   clearSessionMemo,
   getMemoStats,
   analyzeTranscriptCache,
+  findLatestTranscriptPath,
+  getLiveAntigravityMetrics,
   handlePreInvocation,
   MAX_MEMO_SESSIONS,
   MAX_MEMO_KEYS_PER_SESSION

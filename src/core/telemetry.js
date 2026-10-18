@@ -85,14 +85,31 @@ function loadStats(force = false) {
       statsCache = { ...getInitialStats(), ...data };
       if (!statsCache.modules) statsCache.modules = getInitialStats().modules;
       lastLoadedMtime = currentMtime;
-      return statsCache;
     } catch (e) {
       // Fallback
     }
   }
 
-  statsCache = getInitialStats();
-  lastLoadedMtime = currentMtime;
+  if (!statsCache) {
+    statsCache = getInitialStats();
+    lastLoadedMtime = currentMtime;
+  }
+
+  // Augment with real-time live Antigravity context metrics (Total tokens + Gemini Prompt Cache)
+  try {
+    const { getLiveAntigravityMetrics } = require('./cache-zone');
+    const live = getLiveAntigravityMetrics();
+    if (live && live.totalContextProcessed > 0) {
+      statsCache.contextMetrics = live;
+      if (!statsCache.modules.cacheZone) {
+        statsCache.modules.cacheZone = { savedChars: 0, savedTokens: 0, hits: 0, upstreamKvCacheTokens: 0 };
+      }
+      statsCache.modules.cacheZone.upstreamKvCacheTokens = live.totalCacheReadTokens;
+      statsCache.modules.cacheZone.hits = live.plannerResponsesCount;
+      statsCache.totalContextProcessed = live.totalContextProcessed;
+    }
+  } catch (_) {}
+
   return statsCache;
 }
 
@@ -237,17 +254,23 @@ function formatDashboard() {
   const cacheZonePct = totalTokens > 0 ? ((cacheZoneTokens / totalTokens) * 100).toFixed(1) : 0;
   const psPct = totalTokens > 0 ? ((psTokens / totalTokens) * 100).toFixed(1) : 0;
 
+  const ctx = stats.contextMetrics || {};
+  const totalContext = ctx.totalContextProcessed || stats.totalOriginalChars || 0;
+  const kvCacheTokens = ctx.totalCacheReadTokens || 0;
+  const kvRatio = ctx.kvCacheHitRatio || 0;
+
   const lines = [
     '',
     '\x1b[1m\x1b[36m╔══════════════════════════════════════════════════════════════════════════╗\x1b[0m',
     '\x1b[1m\x1b[36m║           Google Antigravity - Context Compression Dashboard             ║\x1b[0m',
     '\x1b[1m\x1b[36m╚══════════════════════════════════════════════════════════════════════════╝\x1b[0m',
     '',
-    `  \x1b[1m\x1b[32m✔ 累计节省 Token 数\x1b[0m     : \x1b[1m\x1b[32m${fmtNum(totalTokens)}\x1b[0m Tokens`,
-    `  \x1b[1m\x1b[32m✔ 累计节省字符体积\x1b[0m     : \x1b[1m${fmtBytes(totalChars)}\x1b[0m (${fmtNum(totalChars)} chars)`,
-    `  \x1b[1m\x1b[33m✔ 综合平均压缩率\x1b[0m       : \x1b[1m\x1b[33m${ratio}%\x1b[0m [${bar(ratio, 16)}]`,
-    `  \x1b[1m\x1b[35m✔ 折合预计减免费用\x1b[0m     : \x1b[1m\x1b[35m$${cost.toFixed(4)} USD\x1b[0m (基于行业大模型基准测算)`,
-    `  \x1b[90m• 累计触发压缩次数     : ${fmtNum(stats.totalInvocations)} 次 | 实时更新于: ${new Date(stats.updatedAt).toLocaleTimeString()}\x1b[0m`,
+    `  \x1b[1m\x1b[34m✔ 全会话处理上下文总体量\x1b[0m : \x1b[1m\x1b[34m${fmtNum(totalContext)}\x1b[0m Tokens (含全部历史轮次与思考链)`,
+    `  \x1b[1m\x1b[35m✔ Google 原厂 KV Cache 命中\x1b[0m: \x1b[1m\x1b[35m${fmtNum(kvCacheTokens)}\x1b[0m Tokens [锁定命中率: \x1b[1m${kvRatio}%\x1b[0m]`,
+    `  \x1b[1m\x1b[32m✔ 终端与结构去噪直接节省\x1b[0m : \x1b[1m\x1b[32m${fmtNum(totalTokens)}\x1b[0m Tokens (${fmtBytes(totalChars)})`,
+    `  \x1b[1m\x1b[33m✔ 综合上下文配额防护率\x1b[0m   : \x1b[1m\x1b[33m${kvRatio > 0 ? kvRatio : ratio}%\x1b[0m [${bar(kvRatio > 0 ? kvRatio : ratio, 16)}]`,
+    `  \x1b[1m\x1b[32m✔ 折合预计减免费用\x1b[0m       : \x1b[1m\x1b[32m$${cost.toFixed(4)} USD\x1b[0m (基于行业大模型基准测算)`,
+    `  \x1b[90m• 累计触发压缩拦截: ${fmtNum(stats.totalInvocations)} 次 | 当前会话轮次: ${fmtNum(ctx.plannerResponsesCount || 0)} | 实时更新于: ${new Date(stats.updatedAt).toLocaleTimeString()}\x1b[0m`,
     '',
     '\x1b[1m── 模块级贡献细分 (Module Contribution) ──────────────────────────────────\x1b[0m',
     `  • \x1b[1mCard 1: RTK 终端与测试去噪\x1b[0m    : ${fmtNum(rtkTokens).padStart(9)} Tokens (${rtkPct.padStart(5)}%) [${bar(rtkPct, 12)}]`,
