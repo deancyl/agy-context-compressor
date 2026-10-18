@@ -198,7 +198,7 @@ function handleToolCall(name, args) {
   }
 
   // 3. agy_retrieve_chunk (Headroom CCR)
-  if (name === 'agy_retrieve_chunk') {
+  if (name === 'agy_retrieve_chunk' || name === 'headroom_retrieve') {
     const chunkId = args.chunk_id;
     const res = retrieveChunk(chunkId, args.start_line, args.end_line);
     if (!res.isFound) {
@@ -216,7 +216,7 @@ function handleToolCall(name, args) {
   }
 
   // 4. read_code_skeleton (Signature Mode)
-  if (name === 'read_code_skeleton') {
+  if (name === 'read_code_skeleton' || name === 'agy_read_skeleton') {
     const filePath = args.path;
     if (!fs.existsSync(filePath)) {
       return {
@@ -241,7 +241,7 @@ function handleToolCall(name, args) {
   }
 
   // 5. compact_search_sandbox (Context Mode FTS5)
-  if (name === 'compact_search_sandbox') {
+  if (name === 'compact_search_sandbox' || name === 'agy_search_context') {
     const result = searchSandbox({
       targetPath: args.path,
       query: args.query,

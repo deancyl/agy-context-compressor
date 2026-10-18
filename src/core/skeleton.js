@@ -2,14 +2,15 @@
  * Code Skeleton (Signature Mode) Engine
  * 100% native Node.js zero dependencies.
  * Extracts classes, methods, function signatures, interfaces, and types
- * while omitting implementation bodies.
- * Reduces token consumption by 75% - 85% when exploring codebases.
+ * with precise source line number annotations (e.g. [Line 45]).
+ * Enables Agent to preview entire file structure in ~15% tokens,
+ * then accurately pinpoint StartLine/EndLine for view_file.
  */
 
 const path = require('node:path');
 
 /**
- * Extracts Python class and function signatures.
+ * Extracts Python class and function signatures with line numbers.
  * @param {string} content
  * @returns {string}
  */
@@ -20,6 +21,7 @@ function extractPythonSkeleton(content) {
   let docstringDelimiter = '';
 
   for (let i = 0; i < lines.length; i++) {
+    const lineNum = i + 1;
     const line = lines[i];
     const trimmed = line.trim();
 
@@ -60,6 +62,8 @@ function extractPythonSkeleton(content) {
 
     // Classes
     if (trimmed.startsWith('class ') || /^\s+class\s+/.test(line)) {
+      const indent = line.match(/^\s*/)[0];
+      out.push(`${indent}# [Line ${lineNum}]`);
       out.push(line);
       continue;
     }
@@ -67,14 +71,15 @@ function extractPythonSkeleton(content) {
     // Function and method signatures
     const defMatch = line.match(/^(\s*)(async\s+def|def)\s+([a-zA-Z0-9_]+)\s*\((.*?)\)(?:\s*->\s*[^:]+)?:/);
     if (defMatch) {
+      const indent = defMatch[1];
+      out.push(`${indent}# [Line ${lineNum}]`);
       out.push(line);
-      const indent = defMatch[1] + '    ';
       // Lookahead for docstring
       const nextLine = (lines[i + 1] || '').trim();
       if (nextLine.startsWith('"""') || nextLine.startsWith("'''")) {
         // Will be caught in next loop
       } else {
-        out.push(`${indent}...`);
+        out.push(`${indent}    ...`);
       }
       continue;
     }
@@ -90,7 +95,7 @@ function extractPythonSkeleton(content) {
 }
 
 /**
- * Extracts JS/TS class, interface, type, and function signatures.
+ * Extracts JS/TS class, interface, type, and function signatures with line numbers.
  * @param {string} content
  * @returns {string}
  */
@@ -99,6 +104,7 @@ function extractJavaScriptSkeleton(content) {
   const out = [];
 
   for (let i = 0; i < lines.length; i++) {
+    const lineNum = i + 1;
     const line = lines[i];
     const trimmed = line.trim();
 
@@ -110,6 +116,7 @@ function extractJavaScriptSkeleton(content) {
 
     // TypeScript types, interfaces, enums
     if (/^(?:export\s+)?(?:type|interface|enum)\s+/.test(trimmed)) {
+      out.push(`// [Line ${lineNum}]`);
       out.push(line);
       if (trimmed.includes('{') && !trimmed.includes('}')) {
         let depth = 1;
@@ -126,6 +133,8 @@ function extractJavaScriptSkeleton(content) {
 
     // Class declarations
     if (/^(?:export\s+)?(?:abstract\s+)?class\s+/.test(trimmed)) {
+      const indent = line.match(/^\s*/)[0];
+      out.push(`${indent}// [Line ${lineNum}]`);
       out.push(line);
       continue;
     }
@@ -134,6 +143,7 @@ function extractJavaScriptSkeleton(content) {
     const fnMatch = line.match(/^(\s*)(?:export\s+)?(?:async\s+)?(?:function\*?|\bfunction\b)\s+([a-zA-Z0-9_$]+)\s*\(([^)]*)\)(?:\s*:\s*[^{]+)?/);
     if (fnMatch) {
       const indent = fnMatch[1];
+      out.push(`${indent}// [Line ${lineNum}]`);
       out.push(`${line.replace(/\{[\s\S]*$/, '').trim()} { /* ... */ }`);
       continue;
     }
@@ -141,6 +151,8 @@ function extractJavaScriptSkeleton(content) {
     // Arrow functions / methods in class or exports
     const methodMatch = line.match(/^(\s*)(?:(?:public|private|protected|static|readonly|async)\s+)*([a-zA-Z0-9_$]+)\s*\(([^)]*)\)(?:\s*:\s*[^{]+)?\s*\{/);
     if (methodMatch && !trimmed.startsWith('if') && !trimmed.startsWith('for') && !trimmed.startsWith('while') && !trimmed.startsWith('switch')) {
+      const indent = methodMatch[1];
+      out.push(`${indent}// [Line ${lineNum}]`);
       out.push(`${line.replace(/\{[\s\S]*$/, '').trim()} { /* ... */ }`);
       continue;
     }
@@ -156,7 +168,7 @@ function extractJavaScriptSkeleton(content) {
 }
 
 /**
- * Extracts Golang struct, interface, and function signatures.
+ * Extracts Golang struct, interface, and function signatures with line numbers.
  * @param {string} content
  * @returns {string}
  */
@@ -165,6 +177,7 @@ function extractGoSkeleton(content) {
   const out = [];
 
   for (let i = 0; i < lines.length; i++) {
+    const lineNum = i + 1;
     const line = lines[i];
     const trimmed = line.trim();
 
@@ -174,6 +187,7 @@ function extractGoSkeleton(content) {
     }
 
     if (/^type\s+[A-Za-z0-9_]+\s+(struct|interface)/.test(trimmed)) {
+      out.push(`// [Line ${lineNum}]`);
       out.push(line);
       if (trimmed.includes('{') && !trimmed.includes('}')) {
         let depth = 1;
@@ -189,6 +203,7 @@ function extractGoSkeleton(content) {
     }
 
     if (/^func\s+/.test(trimmed)) {
+      out.push(`// [Line ${lineNum}]`);
       out.push(`${line.replace(/\{[\s\S]*$/, '').trim()} { ... }`);
       continue;
     }
@@ -220,7 +235,6 @@ function extractCodeSkeleton(content, filePath = '') {
     case '.go':
       return extractGoSkeleton(content);
     default:
-      // If language not explicitly specialized, return first 100 lines
       const lines = content.split(/\r?\n/);
       if (lines.length > 120) {
         return lines.slice(0, 100).join('\n') + `\n\n// ... [${lines.length - 100} lines omitted by Code Skeleton]`;

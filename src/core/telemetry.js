@@ -34,6 +34,18 @@ function getStatsFilePath() {
   return path.join(configDir, 'agy-compression-stats.json');
 }
 
+function getEventsFilePath() {
+  const statsFile = getStatsFilePath();
+  return path.join(path.dirname(statsFile), 'agy-compression-events.jsonl');
+}
+
+function appendEventLog(event) {
+  try {
+    const file = getEventsFilePath();
+    fs.appendFileSync(file, JSON.stringify(event) + '\n', 'utf8');
+  } catch (_) {}
+}
+
 let statsCache = null;
 let lastLoadedMtime = 0;
 
@@ -209,18 +221,18 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
     }
   }
 
-  // Ring buffer for recent events
-  if (!Array.isArray(stats.recentEvents)) stats.recentEvents = [];
-  stats.recentEvents.unshift({
+  const event = {
     module: moduleName,
     savedChars: deltaChars,
     savedTokens: tokens,
     timestamp: new Date().toISOString(),
     ...metadata
-  });
+  };
+  stats.recentEvents.unshift(event);
   if (stats.recentEvents.length > 20) {
     stats.recentEvents.length = 20;
   }
+  appendEventLog(event);
 
   stats.updatedAt = new Date().toISOString();
   // Real-time: Flush immediately to disk so other processes see updates instantly!

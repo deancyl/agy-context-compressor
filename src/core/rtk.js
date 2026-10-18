@@ -129,7 +129,13 @@ function foldTestPasses(text, options = {}) {
     let folded = false;
     const flushRun = () => {
       if (passingRun.length >= 3) {
-        result.push(`[Test suite: ${passingRun.length} passed tests folded (✓ / PASS / ok)]`);
+        let chunkNotice = '';
+        try {
+          const { storeChunk } = require('./chunk-store');
+          const chunkId = storeChunk(passingRun.join(newline), { type: 'test_passes', count: passingRun.length });
+          if (chunkId) chunkNotice = ` [CCR: agy_retrieve_chunk(chunk_id="${chunkId}")]`;
+        } catch (_) {}
+        result.push(`[Test suite: ${passingRun.length} passed tests folded (✓ / PASS / ok)]${chunkNotice}`);
         folded = true;
       } else {
         result.push(...passingRun);
