@@ -7,6 +7,7 @@ const { stripAnsi, cleanProgressBars, foldTestPasses, cleanDockerOutput, cleanTe
 const { foldLockfiles, foldStructuredData } = require('./headroom');
 const { alignToolsSchema, slimToolsSchema } = require('./schema');
 const { cleanPowerShellNoise, fixPowerShellCommandEscaping } = require('./powershell');
+const { recordSavings, getStats } = require('./telemetry');
 
 const COMPACTOR_PRESETS = {
   balanced: {
@@ -81,45 +82,55 @@ function resolveOptions(options = {}) {
 function compactOutput(text, userOptions = {}) {
   if (typeof text !== 'string' || text.length === 0) return text;
   const opts = resolveOptions(userOptions);
+  const originalLength = text.length;
 
   let result = text;
 
-  // 1. Strip ANSI
+  // 1. RTK: Strip ANSI & Progress Bars
+  const beforeRtk1 = result.length;
   if (opts.stripAnsi) {
     result = stripAnsi(result);
   }
-
-  // 2. Clean Progress Bars
   if (opts.cleanProgressBars) {
     result = cleanProgressBars(result);
   }
 
-  // 3. Clean PowerShell / CLIXML / CategoryInfo noise
+  // 2. PowerShell / CLIXML noise
+  const beforePs = result.length;
   if (opts.cleanPowerShellNoise) {
     result = cleanPowerShellNoise(result);
   }
+  const psDelta = beforePs - result.length;
+  if (psDelta > 0 && opts.recordTelemetry !== false) {
+    recordSavings('powershell', psDelta, beforePs);
+  }
 
-  // 4. Clean DevOps outputs (Docker / Terraform)
+  // 3. DevOps outputs & Test folding
   if (opts.cleanDockerOutput) {
     result = cleanDockerOutput(result);
   }
   if (opts.cleanTerraformOutput) {
     result = cleanTerraformOutput(result);
   }
-
-  // 5. Fold Test Passes (preserving FAIL / traceback)
   if (opts.foldTestPasses) {
     result = foldTestPasses(result, opts);
   }
+  const rtkDelta = (beforeRtk1 - beforePs) + (beforePs - psDelta - result.length);
+  if (rtkDelta > 0 && opts.recordTelemetry !== false) {
+    recordSavings('rtk', rtkDelta, beforeRtk1);
+  }
 
-  // 6. Fold Lockfile diffs if present in output
+  // 4. Headroom: Fold Lockfile diffs & Structured JSON
+  const beforeHeadroom = result.length;
   if (opts.foldLockfiles) {
     result = foldLockfiles(result, opts);
   }
-
-  // 7. Fold Structured JSON
   if (opts.foldStructuredData) {
     result = foldStructuredData(result, opts);
+  }
+  const headroomDelta = beforeHeadroom - result.length;
+  if (headroomDelta > 0 && opts.recordTelemetry !== false) {
+    recordSavings('headroom', headroomDelta, beforeHeadroom);
   }
 
   return result;
@@ -139,5 +150,6 @@ module.exports = {
   alignToolsSchema,
   slimToolsSchema,
   cleanPowerShellNoise,
-  fixPowerShellCommandEscaping
+  fixPowerShellCommandEscaping,
+  getStats
 };

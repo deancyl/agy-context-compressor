@@ -5,6 +5,7 @@
 
 const path = require('node:path');
 const { fixPowerShellCommandEscaping } = require('../core/powershell');
+const { recordPowerShellFix } = require('../core/telemetry');
 
 const STREAM_FILTER_PATH = path.resolve(__dirname, 'stream-filter.js');
 
@@ -36,6 +37,9 @@ function handlePreToolUse(payload, options = {}) {
     }
 
     if (optimizedCmd !== rawCmd) {
+      if (options.recordTelemetry !== false) {
+        recordPowerShellFix();
+      }
       return {
         decision: 'allow',
         overwrite: {

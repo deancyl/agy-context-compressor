@@ -10,6 +10,7 @@ const os = require('node:os');
 const { execSync } = require('node:child_process');
 const { compactOutput } = require('../src/core/compactor');
 const { fixPowerShellCommandEscaping } = require('../src/core/powershell');
+const { formatDashboard, resetStats, getStats } = require('../src/core/telemetry');
 
 const args = process.argv.slice(2);
 const command = args[0] || 'help';
@@ -37,7 +38,6 @@ function installHook(target = 'global') {
   if (fs.existsSync(hooksFile)) {
     try {
       hooksConfig = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
-      // Backup original
       fs.writeFileSync(`${hooksFile}.bak_${Date.now()}`, JSON.stringify(hooksConfig, null, 2));
     } catch (e) {
       console.warn(`[Warning] Existing hooks.json could not be parsed. Starting fresh.`);
@@ -131,7 +131,7 @@ function runDoctor() {
 
   // 5. Engine Health Check
   const sampleRaw = '\u001b[32m✔\u001b[0m test passed\r\n\u001b[32m✓\u001b[0m test 2 passed\r\n\u001b[32m✓\u001b[0m test 3 passed\r\n';
-  const sampleCompacted = compactOutput(sampleRaw);
+  const sampleCompacted = compactOutput(sampleRaw, { recordTelemetry: false });
   const sampleEscape = fixPowerShellCommandEscaping('curl "C:\\test\\" -X GET');
 
   if (sampleCompacted.includes('passed tests folded') && sampleEscape.includes('curl.exe') && sampleEscape.includes('C:\\test\\\\')) {
@@ -140,7 +140,20 @@ function runDoctor() {
     console.log(`  \x1b[31m✖ Core Compression Engines:\x1b[0m Self-test anomaly detected`);
   }
 
-  console.log('\n\x1b[1mDoctor complete.\x1b[0m\n');
+  // 6. Cumulative Telemetry Summary
+  const stats = getStats();
+  console.log(`  \x1b[36m✔ Cumulative Saved Tokens:\x1b[0m \x1b[1m\x1b[32m${(stats.savedTokens || 0).toLocaleString()} Tokens\x1b[0m (Saved: $${(stats.savedCostUSD || 0).toFixed(4)} USD)`);
+
+  console.log('\n\x1b[1mDoctor complete.\x1b[0m Run \x1b[36magy-compressor stats\x1b[0m to view full dashboard.\n');
+}
+
+function runStats() {
+  if (args.includes('--reset')) {
+    resetStats();
+    console.log('\x1b[32m✔ Compression telemetry statistics have been reset.\x1b[0m');
+    return;
+  }
+  console.log(formatDashboard());
 }
 
 function showHelp() {
@@ -151,15 +164,21 @@ Usage:
   agy-compressor <command> [options]
 
 Commands:
+  stats [--reset]                 View real-time saved tokens, compression ratios & cost savings
+  doctor                          Run environment, hook status and engine health diagnosis
   install [--global|--project]    Install the PreToolUse hook into Antigravity
   uninstall [--global|--project]  Remove the hook
-  doctor                          Run environment and compression health diagnosis
   filter                          Read stdin, compact, and write to stdout
   help                            Show this help message
 `);
 }
 
 switch (command) {
+  case 'stats':
+  case 'telemetry':
+  case 'metrics':
+    runStats();
+    break;
   case 'install':
     installHook(args[1] === '--project' ? 'project' : 'global');
     break;

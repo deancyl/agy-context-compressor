@@ -13,6 +13,7 @@ const { execSync } = require('node:child_process');
 const readline = require('node:readline');
 const { compactOutput, foldLockfiles, foldStructuredData } = require('../core/compactor');
 const { fixPowerShellCommandEscaping } = require('../core/powershell');
+const { recordSavings } = require('../core/telemetry');
 
 const TOOLS = [
   {
@@ -68,13 +69,19 @@ function handleToolCall(name, args) {
       };
     }
 
-    let content = fs.readFileSync(filePath, 'utf8');
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const origLen = raw.length;
     const filename = path.basename(filePath);
 
     // Apply lockfile folding
-    content = foldLockfiles(content, { filename });
+    let content = foldLockfiles(raw, { filename });
     // Apply structured data folding
     content = foldStructuredData(content);
+
+    const delta = origLen - content.length;
+    if (delta > 0) {
+      recordSavings('headroom', delta, origLen, { filename });
+    }
 
     if (args.maxLines && typeof args.maxLines === 'number') {
       const lines = content.split(/\r?\n/);

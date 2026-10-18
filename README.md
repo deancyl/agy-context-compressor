@@ -123,6 +123,48 @@ Copy-Item -Recurse -Path . -Destination "$HOME/.gemini/config/plugins/agy-contex
 
 ---
 
+## 📊 实时 Token 节省大盘与遥测 (`agy-compressor stats`)
+
+本项目内置与 `opencode-go-router` 等位的工业级实时 Token 遥测引擎。您可以随时在终端唤出全景大盘，查看**累计节省 Token 数、压缩率、折合节省费用与各模块贡献细分**：
+
+```powershell
+node bin/agy-compressor.js stats
+```
+
+终端实时大盘输出示例：
+
+```text
+╔══════════════════════════════════════════════════════════════════════════╗
+║           Google Antigravity - Context Compression Dashboard             ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+  ✔ 累计节省 Token 数     : 128,450 Tokens
+  ✔ 累计节省字符体积     : 488.2 KB (500,210 chars)
+  ✔ 综合平均压缩率       : 76.4% [███████████████░░░░░]
+  ✔ 折合预计减免费用     : $0.1927 USD (基于行业大模型基准测算)
+  • 累计触发压缩次数     : 42 次 | 上次更新: 22:02:01
+
+── 模块级贡献细分 (Module Contribution) ──────────────────────────────────
+  • Card 1: RTK 终端与测试去噪    :    68,200 Tokens ( 53.1%) [██████████░░]
+  • Card 2: Headroom 结构折叠     :    42,150 Tokens ( 32.8%) [███████░░░░░]
+  • Card 3: Tools 缓存对齐瘦身   :    12,300 Tokens (  9.6%) [██░░░░░░░░░░]
+  • Card 5: PowerShell 报错去噪   :     5,800 Tokens (  4.5%) [█░░░░░░░░░░░]
+    (已自动拦截修复 Windows 命令语法与反斜杠陷阱: 18 次)
+
+── 最近压缩事件 (Recent Events) ──────────────────────────────────────────
+  1. [22:02:01] [RTK] 节省 12,450 Tokens (47.3 KB)
+  2. [22:00:15] [HEADROOM] 节省 38,200 Tokens (145.1 KB)
+
+数据持久化路径: C:\Users\deanc\.gemini\config\agy-compression-stats.json
+```
+
+重置统计数据：
+```powershell
+node bin/agy-compressor.js stats --reset
+```
+
+---
+
 ## 🩺 系统健康自检 (Doctor)
 
 随时运行以下命令检查当前环境状态与引擎自检：
@@ -140,42 +182,47 @@ node bin/agy-compressor.js doctor
   ✔ PreToolUse Hook: Active in C:\Users\deanc\.gemini\config\hooks.json
   ✔ Host Platform: win32 (10.0.26300)
   ✔ Core Compression Engines: Self-test PASSED (RTK + PowerShell guards verified)
+  ✔ Cumulative Saved Tokens: 128,450 Tokens (Saved: $0.1927 USD)
 
-Doctor complete.
+Doctor complete. Run agy-compressor stats to view full dashboard.
 ```
 
 ---
 
 ## 🧪 自动化测试套件
 
-本项目严守高质量测试标准，内置 18 项严苛的单元与集成测试（覆盖各种 ANSI 转义、Git 冲突绝对豁免、PowerShell 转义与 Hook 合同）：
+本项目严守高质量测试标准，内置 22 项严苛的单元与集成测试（覆盖各种 ANSI 转义、Git 冲突绝对豁免、PowerShell 转义、Token 估算、遥测持久化与 Hook 合同）：
 
 ```powershell
 npm test
 ```
 
 ```text
-✔ isLockfilePath: identifies common package manager lockfiles (1.3ms)
-✔ foldLockfiles: folds lockfile git diffs (0.9ms)
+✔ isLockfilePath: identifies common package manager lockfiles (0.7ms)
+✔ foldLockfiles: folds lockfile git diffs (0.5ms)
 ✔ foldLockfiles: ABSOLUTELY EXEMPTS Git merge conflicts from folding (0.2ms)
-✔ foldStructuredData: folds large homogeneous JSON arrays while preserving schema (0.4ms)
-✔ handlePreToolUse: rewrites run_command with PowerShell escaping fixes (1.1ms)
-✔ handlePreToolUse: leaves clean commands or non-run_command tools untouched (0.3ms)
-✔ cleanPowerShellNoise: decodes and extracts clean error from #< CLIXML (1.1ms)
+✔ foldStructuredData: folds large homogeneous JSON arrays while preserving schema (0.3ms)
+✔ handlePreToolUse: rewrites run_command with PowerShell escaping fixes (2.0ms)
+✔ handlePreToolUse: leaves clean commands or non-run_command tools untouched (0.2ms)
+✔ cleanPowerShellNoise: decodes and extracts clean error from #< CLIXML (0.8ms)
 ✔ cleanPowerShellNoise: strips CategoryInfo and FullyQualifiedErrorId blocks (0.2ms)
 ✔ fixPowerShellCommandEscaping: fixes curl alias and trailing backslash quote eating (0.4ms)
 ✔ fixPowerShellCommandEscaping: translates && for PowerShell 5.1 compatibility (0.2ms)
 ✔ stripAnsi: removes color codes and terminal controls (0.9ms)
-✔ cleanProgressBars: cleans \r overwrite frames while preserving line endings (0.3ms)
+✔ cleanProgressBars: cleans \r overwrite frames while preserving line endings (0.2ms)
 ✔ foldTestPasses: folds passing tests while 100% preserving failures and stack traces (1.2ms)
-✔ cleanDockerOutput: folds multi-layer download lines (0.4ms)
+✔ cleanDockerOutput: folds multi-layer download lines (0.5ms)
 ✔ cleanTerraformOutput: folds resource refreshing lines (0.3ms)
-✔ sortKeysDeep: sorts nested object keys alphabetically (2.3ms)
-✔ alignToolsSchema: sorts tools by name and sorts parameters (6.6ms)
+✔ sortKeysDeep: sorts nested object keys alphabetically (1.1ms)
+✔ alignToolsSchema: sorts tools by name and sorts parameters (7.0ms)
 ✔ slimToolsSchema: trims verbose markdown examples when exceeding threshold (0.4ms)
+✔ estimateTokens: calculates tokens accurately for English/code and CJK (0.6ms)
+✔ recordSavings: updates totalSavedChars, savedTokens, and module metrics (2.4ms)
+✔ recordPowerShellFix: increments fixed commands counter (1.3ms)
+✔ formatDashboard: renders clean colorized dashboard without throwing (79.8ms)
 
-ℹ pass 18
-ℹ duration_ms 201.8ms
+ℹ pass 22
+ℹ duration_ms 682ms
 ```
 
 ---
