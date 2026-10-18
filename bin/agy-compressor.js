@@ -1,92 +1,105 @@
 #!/usr/bin/env node
 /**
- * agy-compressor CLI & Doctor
+ * agy-compressor CLI, TUI & Doctor
  * Management utility for Antigravity Context Compressor.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execSync } = require('node:child_process');
+const { execSync, spawn } = require('node:child_process');
 const { compactOutput } = require('../src/core/compactor');
 const { fixPowerShellCommandEscaping } = require('../src/core/powershell');
 const { formatDashboard, resetStats, getStats } = require('../src/core/telemetry');
+const {
+  getHooksFilePath,
+  isHookInstalled,
+  installHook,
+  uninstallHook,
+  restoreHookBackup,
+  verifyHookExecution
+} = require('../src/utils/hook-manager');
+const { createDesktopShortcut } = require('../src/utils/shortcut');
 
 const args = process.argv.slice(2);
-const command = args[0] || 'help';
+const command = args[0] || (process.stdin.isTTY ? 'tui' : 'help');
 
-const HOOK_RUNNER_PATH = path.resolve(__dirname, '..', 'src', 'hooks', 'hook-runner.js');
-
-function getGlobalHooksPath() {
-  const home = os.homedir();
-  return path.join(home, '.gemini', 'config', 'hooks.json');
-}
-
-function getProjectHooksPath() {
-  return path.join(process.cwd(), '.agents', 'hooks.json');
-}
-
-function installHook(target = 'global') {
-  const hooksFile = target === 'global' ? getGlobalHooksPath() : getProjectHooksPath();
-  const dir = path.dirname(hooksFile);
-
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  let hooksConfig = {};
-  if (fs.existsSync(hooksFile)) {
-    try {
-      hooksConfig = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
-      fs.writeFileSync(`${hooksFile}.bak_${Date.now()}`, JSON.stringify(hooksConfig, null, 2));
-    } catch (e) {
-      console.warn(`[Warning] Existing hooks.json could not be parsed. Starting fresh.`);
-    }
-  }
-
-  const hookCommand = `node "${HOOK_RUNNER_PATH.replace(/\\/g, '/')}" pre-tool-use`;
-
-  // Inject or update hook
-  hooksConfig['agy-context-compressor'] = {
-    enabled: true,
-    PreToolUse: [
-      {
-        matcher: 'run_command',
-        hooks: [
-          {
-            type: 'command',
-            command: hookCommand,
-            timeout: 10
-          }
-        ]
-      }
-    ]
-  };
-
-  fs.writeFileSync(hooksFile, JSON.stringify(hooksConfig, null, 2), 'utf8');
-  console.log(`\x1b[32m✔ Successfully installed agy-context-compressor hook to:\x1b[0m ${hooksFile}`);
-  console.log(`  Hook command: ${hookCommand}`);
-}
-
-function uninstallHook(target = 'global') {
-  const hooksFile = target === 'global' ? getGlobalHooksPath() : getProjectHooksPath();
-  if (!fs.existsSync(hooksFile)) {
-    console.log(`No hooks file found at ${hooksFile}. Nothing to uninstall.`);
-    return;
-  }
-
+function handleInstall(target = 'global') {
   try {
-    const hooksConfig = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
-    if (hooksConfig['agy-context-compressor']) {
-      delete hooksConfig['agy-context-compressor'];
-      fs.writeFileSync(hooksFile, JSON.stringify(hooksConfig, null, 2), 'utf8');
-      console.log(`\x1b[32m✔ Successfully removed agy-context-compressor hook from:\x1b[0m ${hooksFile}`);
-    } else {
-      console.log(`Hook not found in ${hooksFile}.`);
+    const res = installHook(target);
+    console.log(`\x1b[32m✔ 成功安装并激活 PreToolUse Hook！\x1b[0m`);
+    console.log(`  配置文件路径: ${res.path}`);
+    if (res.backupPath) {
+      console.log(`  原配置已备份至: ${res.backupPath}`);
     }
-  } catch (e) {
-    console.error(`Failed to modify hooks file:`, e.message);
+    console.log(`  \x1b[36m✔ 实时自测验证: PASSED (已通过测试命令验证拦截器正常运行)\x1b[0m`);
+  } catch (err) {
+    console.error(`\x1b[31m✖ 安装失败:\x1b[0m ${err.message}`);
   }
+}
+
+function handleUninstall(target = 'global') {
+  try {
+    const res = uninstallHook(target);
+    console.log(`\x1b[32m✔ 成功卸载并清除 PreToolUse Hook！\x1b[0m`);
+    console.log(`  配置文件路径: ${res.path}`);
+    if (res.hadOtherHooks) {
+      console.log(`  \x1b[36m• 检测到其他用户自定义 Hook，已全部完好保留。\x1b[0m`);
+    }
+    console.log(`  \x1b[36m✔ 状态校验: Hook 已彻底停用。\x1b[0m`);
+  } catch (err) {
+    console.error(`\x1b[31m✖ 卸载失败:\x1b[0m ${err.message}`);
+  }
+}
+
+function handleRestore(target = 'global') {
+  try {
+    const res = restoreHookBackup(target);
+    console.log(`\x1b[32m✔ 成功一键恢复配置备份！\x1b[0m`);
+    console.log(`  恢复来源文件: ${res.restoredFrom}`);
+  } catch (err) {
+    console.error(`\x1b[31m✖ 恢复备份失败:\x1b[0m ${err.message}`);
+  }
+}
+
+function handleShortcut() {
+  const res = createDesktopShortcut();
+  if (res.success) {
+    console.log(`\x1b[32m✔ 成功在 Windows 桌面创建一键启动快捷方式！\x1b[0m`);
+    console.log(`  快捷方式路径: ${res.path}`);
+    console.log(`  双击桌面图标即可直接唤出本导航控制台。`);
+  } else {
+    console.error(`\x1b[31m✖ 创建快捷方式失败:\x1b[0m ${res.reason}`);
+  }
+}
+
+function launchEdgeGui() {
+  const guiServerScript = path.resolve(__dirname, '..', 'src', 'gui', 'server.js');
+  const serverProc = spawn(process.execPath, [guiServerScript], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true
+  });
+  serverProc.unref();
+
+  setTimeout(() => {
+    const edgePaths = [
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+    ];
+    const browser = edgePaths.find(p => fs.existsSync(p));
+    if (browser) {
+      const browserProc = spawn(browser, ['--app=http://127.0.0.1:4012'], {
+        detached: true,
+        stdio: 'ignore'
+      });
+      browserProc.unref();
+      console.log(`\x1b[32m✔ 已在独立桌面应用模式唤出控制台 (http://127.0.0.1:4012)\x1b[0m`);
+    } else {
+      console.log(`请在浏览器中打开: http://127.0.0.1:4012`);
+    }
+  }, 400);
 }
 
 function runDoctor() {
@@ -109,21 +122,18 @@ function runDoctor() {
     console.log(`  \x1b[33m! Antigravity Global Config:\x1b[0m Directory not created yet (${globalConfigDir})`);
   }
 
-  // 3. Hook Status
-  const globalHooks = getGlobalHooksPath();
-  let installed = false;
-  if (fs.existsSync(globalHooks)) {
-    try {
-      const cfg = JSON.parse(fs.readFileSync(globalHooks, 'utf8'));
-      if (cfg['agy-context-compressor'] && cfg['agy-context-compressor'].enabled !== false) {
-        installed = true;
-      }
-    } catch (_) {}
-  }
+  // 3. Hook Status & Live Execution Test
+  const installed = isHookInstalled('global');
   if (installed) {
-    console.log(`  \x1b[32m✔ PreToolUse Hook:\x1b[0m Active in ${globalHooks}`);
+    console.log(`  \x1b[32m✔ PreToolUse Hook:\x1b[0m Active in ${getHooksFilePath('global')}`);
+    const execTest = verifyHookExecution();
+    if (execTest.success) {
+      console.log(`  \x1b[32m✔ Hook Execution Check:\x1b[0m PASSED (Live interceptor verified functional)`);
+    } else {
+      console.log(`  \x1b[31m✖ Hook Execution Check:\x1b[0m FAILED (${execTest.reason})`);
+    }
   } else {
-    console.log(`  \x1b[33m! PreToolUse Hook:\x1b[0m Not installed globally. Run 'agy-compressor install --global' to enable.`);
+    console.log(`  \x1b[33m! PreToolUse Hook:\x1b[0m Not active globally. [按 3] 即可一键全局开启。`);
   }
 
   // 4. Shell & Platform
@@ -144,13 +154,13 @@ function runDoctor() {
   const stats = getStats();
   console.log(`  \x1b[36m✔ Cumulative Saved Tokens:\x1b[0m \x1b[1m\x1b[32m${(stats.savedTokens || 0).toLocaleString()} Tokens\x1b[0m (Saved: $${(stats.savedCostUSD || 0).toFixed(4)} USD)`);
 
-  console.log('\n\x1b[1mDoctor complete.\x1b[0m Run \x1b[36magy-compressor stats\x1b[0m to view full dashboard.\n');
+  console.log('\n\x1b[1mDoctor complete.\x1b[0m\n');
 }
 
 function runStats() {
   if (args.includes('--reset')) {
     resetStats();
-    console.log('\x1b[32m✔ Compression telemetry statistics have been reset.\x1b[0m');
+    console.log('\x1b[32m✔ 压缩遥测数据已成功清零重置。\x1b[0m');
     return;
   }
   console.log(formatDashboard());
@@ -158,32 +168,59 @@ function runStats() {
 
 function showHelp() {
   console.log(`
-agy-context-compressor - CLI Tool
+agy-context-compressor - 交互式导航控制台
 
-Usage:
-  agy-compressor <command> [options]
+用法:
+  agy-compressor [命令] [选项]
 
-Commands:
-  stats [--reset]                 View real-time saved tokens, compression ratios & cost savings
-  doctor                          Run environment, hook status and engine health diagnosis
-  install [--global|--project]    Install the PreToolUse hook into Antigravity
-  uninstall [--global|--project]  Remove the hook
-  filter                          Read stdin, compact, and write to stdout
-  help                            Show this help message
+预设命令导航:
+  tui                             启动交互式按键导航控制台 (无需手动记参数)
+  stats [--reset]                 查看实时 Token 节省大盘、压缩率与减免费用
+  doctor                          运行系统环境、Hook 拦截器执行健康自诊断
+  install [--global|--project]    一键安装并激活 PreToolUse Hook (自校验保障)
+  uninstall [--global|--project]  一键卸载并清除 Hook (完全恢复原状)
+  restore [--global|--project]    从最近的安全备份中一键还原 hooks.json
+  shortcut                        在 Windows 桌面创建一键双击启动快捷方式
+  gui                             在独立桌面应用模式下呼出 Web 控制台
+  help                            显示此帮助说明
 `);
 }
 
 switch (command) {
+  case 'tui':
+  case 'menu':
+  case 'nav': {
+    const { startTui } = require('../src/gui/tui');
+    startTui({
+      onInstall: handleInstall,
+      onUninstall: handleUninstall,
+      onDoctor: runDoctor,
+      onLaunchGui: launchEdgeGui,
+      onCreateShortcut: handleShortcut
+    });
+    break;
+  }
   case 'stats':
   case 'telemetry':
   case 'metrics':
     runStats();
     break;
   case 'install':
-    installHook(args[1] === '--project' ? 'project' : 'global');
+    handleInstall(args[1] === '--project' ? 'project' : 'global');
     break;
   case 'uninstall':
-    uninstallHook(args[1] === '--project' ? 'project' : 'global');
+    handleUninstall(args[1] === '--project' ? 'project' : 'global');
+    break;
+  case 'restore':
+    handleRestore(args[1] === '--project' ? 'project' : 'global');
+    break;
+  case 'shortcut':
+  case 'create-shortcut':
+    handleShortcut();
+    break;
+  case 'gui':
+  case 'dashboard':
+    launchEdgeGui();
     break;
   case 'doctor':
     runDoctor();

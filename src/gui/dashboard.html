@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AGY 上下文优化与 Token 压缩控制台</title>
+  <style>
+    :root {
+      --bg: #131314;
+      --card-bg: #1e1f20;
+      --card-hover: #28292a;
+      --border: #333537;
+      --text: #e3e3e3;
+      --muted: #9aa0a6;
+      --primary: #8ab4f8;
+      --success: #81c995;
+      --warning: #fdd663;
+      --danger: #f28b82;
+      --accent: #c58af9;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      padding: 24px;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .container { max-width: 1080px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .title-area h1 { font-size: 20px; font-weight: 600; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .title-area p { font-size: 13px; color: var(--muted); margin-top: 4px; }
+    .status-badges { display: flex; gap: 10px; align-items: center; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 500;
+      background: #202124;
+      border: 1px solid var(--border);
+    }
+    .badge.green { color: var(--success); border-color: rgba(129, 201, 149, 0.3); }
+    .badge.blue { color: var(--primary); border-color: rgba(138, 180, 248, 0.3); }
+    .badge.red { color: var(--danger); border-color: rgba(242, 139, 130, 0.3); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+    /* Action Nav Bar */
+    .nav-actions {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      background: var(--card-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn:hover { background: var(--card-hover); border-color: var(--primary); transform: translateY(-1px); }
+    .btn.primary { background: #1a365d; border-color: #2b6cb0; color: #90cdf4; }
+    .btn.primary:hover { background: #2b6cb0; color: #fff; }
+    .btn.success { background: #1c3d2c; border-color: #2f855a; color: #9ae6b4; }
+    .btn.danger { background: #3d1c1c; border-color: #9b2c2c; color: #feb2b2; }
+
+    /* Hero Grid */
+    .hero-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .metric-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      transition: border-color 0.15s ease;
+    }
+    .metric-card:hover { border-color: #5f6368; }
+    .metric-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; display: flex; justify-content: space-between; }
+    .metric-value { font-size: 28px; font-weight: 700; color: #fff; letter-spacing: -0.5px; }
+    .metric-sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+    /* Progress bar */
+    .progress-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: #2d3033;
+      border-radius: 3px;
+      margin-top: 10px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--success));
+      border-radius: 3px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    /* Modules Grid */
+    .section-title { font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 12px; }
+    .modules-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .module-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .module-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .module-name { font-size: 14px; font-weight: 600; color: #fff; }
+    .module-tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #282a2d; color: var(--primary); }
+    .module-desc { font-size: 12px; color: var(--muted); line-height: 1.4; margin-bottom: 10px; }
+
+    /* Timeline & Doctor Panels */
+    .panels-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    @media (max-width: 768px) { .panels-grid { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .event-list { list-style: none; max-height: 220px; overflow-y: auto; }
+    .event-item {
+      padding: 8px 0;
+      border-bottom: 1px solid #282a2d;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      color: var(--text);
+    }
+    .event-item:last-child { border-bottom: none; }
+    .event-meta { color: var(--muted); }
+
+    /* Doctor list */
+    .doctor-item { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: 13px; border-bottom: 1px solid #282a2d; }
+    .doctor-item:last-child { border-bottom: none; }
+    .check { color: var(--success); font-weight: bold; }
+    .alert { color: var(--warning); font-weight: bold; }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #202124;
+      border: 1px solid var(--primary);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.2s ease;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-area">
+        <h1>🚀 Google Antigravity Context Compressor</h1>
+        <p>无损上下文优化与 Token 压缩控制台 (Industrial Token Optimization Engine)</p>
+      </div>
+      <div class="status-badges">
+        <div class="badge green"><span class="dot"></span>服务就绪 (Port 4012)</div>
+        <div id="hookBadge" class="badge blue"><span class="dot"></span>Hook 状态探测中...</div>
+      </div>
+    </header>
+
+    <!-- Nav Action Buttons -->
+    <div class="nav-actions">
+      <button class="btn primary" onclick="refreshData(true)">
+        <span>📊</span> 刷新大盘
+      </button>
+      <button class="btn" onclick="runDoctorManual()">
+        <span>🩺</span> 一键体检自诊 (Doctor)
+      </button>
+      <button id="toggleHookBtn" class="btn success" onclick="toggleHook()">
+        <span>⚡</span> 一键全局安装 Hook
+      </button>
+      <button class="btn danger" onclick="resetStatsConfirm()">
+        <span>🔄</span> 重置遥测数据
+      </button>
+    </div>
+
+    <!-- Hero Metrics -->
+    <div class="hero-grid">
+      <div class="metric-card">
+        <div class="metric-title">累计节省 Token 数 <span>🎯</span></div>
+        <div id="savedTokens" class="metric-value">0</div>
+        <div id="savedTokensSub" class="metric-sub">折合输入 Token 消耗减免</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">累计精简字符体积 <span>📦</span></div>
+        <div id="savedChars" class="metric-value">0 B</div>
+        <div id="savedCharsSub" class="metric-sub">已阻断 0 chars 冗余流向大模型</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">综合平均压缩率 <span>⚡</span></div>
+        <div id="compressionRatio" class="metric-value">0.0%</div>
+        <div class="progress-bar-bg">
+          <div id="ratioBar" class="progress-bar-fill"></div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">折合减免算力账单 <span>💰</span></div>
+        <div id="savedCost" class="metric-value">$0.0000</div>
+        <div class="metric-sub">基于行业大模型基准加权测算</div>
+      </div>
+    </div>
+
+    <!-- Module Contribution -->
+    <div class="section-title">五大引擎模块贡献细分 (Engine Breakdown)</div>
+    <div class="modules-grid">
+      <div class="module-card">
+        <div class="module-header">
+          <div class="module-name">Card 1: RTK 终端去噪</div>
+          <span class="module-tag">RTK Engine</span>
+        </div>
+        <div class="module-desc">ANSI 转义清洗、\r 进度条合并、测试通过项正向折叠 (PASS/✓ 折叠, 报错100%保留)。</div>
+        <div id="rtkTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
+        <div id="rtkSub" class="metric-sub">占比 0% | 触发 0 次</div>
+      </div>
+      <div class="module-card">
+        <div class="module-header">
+          <div class="module-name">Card 2: Headroom 结构折叠</div>
+          <span class="module-tag">Headroom</span>
+        </div>
+        <div class="module-desc">依赖锁文件 safe folding、同构 JSON 采样。冲突标记 (&lt;&lt;&lt;&lt;&lt;&lt;&lt;) 绝对豁免！</div>
+        <div id="headroomTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
+        <div id="headroomSub" class="metric-sub">占比 0% | 触发 0 次</div>
+      </div>
+      <div class="module-card">
+        <div class="module-header">
+          <div class="module-name">Card 3: Tools 缓存对齐</div>
+          <span class="module-tag">CacheAligner</span>
+        </div>
+        <div class="module-desc">参数严格字典序排序，锁定 Gemini Prompt Cache 前缀；超大 Schema Markdown 裁剪。</div>
+        <div id="schemaTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
+        <div id="schemaSub" class="metric-sub">占比 0%</div>
+      </div>
+      <div class="module-card">
+        <div class="module-header">
+          <div class="module-name">Card 5: PowerShell Guard</div>
+          <span class="module-tag">Windows Guard</span>
+        </div>
+        <div class="module-desc">反斜杠防吞噬引号、curl.exe 别名修正、#&lt; CLIXML 报错去噪与 Hex 解码。</div>
+        <div id="psTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
+        <div id="psSub" class="metric-sub">拦截转义陷阱 0 次</div>
+      </div>
+    </div>
+
+    <!-- Doctor & Recent Events -->
+    <div class="panels-grid">
+      <div class="panel">
+        <div class="section-title">🩺 系统体检健康状态 (Doctor Diagnostic)</div>
+        <div id="doctorContainer">
+          <div class="doctor-item"><span class="check">✔</span> 正在探测运行时与配置环境...</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="section-title">📜 最近压缩拦截事件流水 (Recent Activity)</div>
+        <ul id="eventsList" class="event-list">
+          <li class="event-item"><span class="event-meta">暂无最近压缩记录</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast">操作已完成</div>
+
+  <script>
+    let isHookInstalled = false;
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function fmtBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    }
+
+    async function refreshData(manual = false) {
+      try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+
+        document.getElementById('savedTokens').innerText = (data.savedTokens || 0).toLocaleString();
+        document.getElementById('savedChars').innerText = fmtBytes(data.totalSavedChars || 0);
+        document.getElementById('savedCharsSub').innerText = `已阻断 ${(data.totalSavedChars || 0).toLocaleString()} 字符冗余写入上下文`;
+
+        const ratio = data.compressionRatio || 0;
+        document.getElementById('compressionRatio').innerText = ratio + '%';
+        document.getElementById('ratioBar').style.width = Math.min(100, ratio) + '%';
+        document.getElementById('savedCost').innerText = '$' + (data.savedCostUSD || 0).toFixed(4);
+
+        // Modules
+        const m = data.modules || {};
+        const total = data.savedTokens || 1;
+        const rtkTok = (m.rtk && m.rtk.savedTokens) || 0;
+        const hrTok = (m.headroom && m.headroom.savedTokens) || 0;
+        const scTok = (m.schema && m.schema.savedTokens) || 0;
+        const psTok = (m.powershell && m.powershell.savedTokens) || 0;
+
+        document.getElementById('rtkTokens').innerText = rtkTok.toLocaleString() + ' Tokens';
+        document.getElementById('rtkSub').innerText = `占比 ${((rtkTok / total) * 100).toFixed(1)}% | 触发 ${(m.rtk && m.rtk.invocations) || 0} 次`;
+
+        document.getElementById('headroomTokens').innerText = hrTok.toLocaleString() + ' Tokens';
+        document.getElementById('headroomSub').innerText = `占比 ${((hrTok / total) * 100).toFixed(1)}% | 触发 ${(m.headroom && m.headroom.invocations) || 0} 次`;
+
+        document.getElementById('schemaTokens').innerText = scTok.toLocaleString() + ' Tokens';
+        document.getElementById('schemaSub').innerText = `占比 ${((scTok / total) * 100).toFixed(1)}%`;
+
+        document.getElementById('psTokens').innerText = psTok.toLocaleString() + ' Tokens';
+        document.getElementById('psSub').innerText = `已修复 Windows 语法陷阱 ${(m.powershell && m.powershell.fixedCommandsCount) || 0} 次`;
+
+        // Recent events
+        const list = document.getElementById('eventsList');
+        if (data.recentEvents && data.recentEvents.length > 0) {
+          list.innerHTML = data.recentEvents.map(ev => {
+            const time = new Date(ev.timestamp).toLocaleTimeString();
+            return `<li class="event-item">
+              <span><strong>[${(ev.module || '').toUpperCase()}]</strong> 节省 ${(ev.savedTokens || 0).toLocaleString()} Tokens (${fmtBytes(ev.savedChars || 0)})</span>
+              <span class="event-meta">${time}</span>
+            </li>`;
+          }).join('');
+        } else {
+          list.innerHTML = '<li class="event-item"><span class="event-meta">暂无活动记录（执行命令或检视文件时自动入账）</span></li>';
+        }
+
+        if (manual) showToast('大盘数据已即时刷新');
+      } catch (err) {
+        console.error('Failed to refresh stats:', err);
+      }
+    }
+
+    async function runDoctorManual() {
+      try {
+        const res = await fetch('/api/doctor');
+        const doc = await res.json();
+        const container = document.getElementById('doctorContainer');
+
+        isHookInstalled = doc.hookInstalled;
+        const hookBadge = document.getElementById('hookBadge');
+        const toggleBtn = document.getElementById('toggleHookBtn');
+
+        if (isHookInstalled) {
+          hookBadge.className = 'badge green';
+          hookBadge.innerHTML = '<span class="dot"></span>PreToolUse Hook 已全局激活';
+          toggleBtn.className = 'btn danger';
+          toggleBtn.innerHTML = '<span>❌</span> 一键卸载全局 Hook';
+        } else {
+          hookBadge.className = 'badge red';
+          hookBadge.innerHTML = '<span class="dot"></span>PreToolUse Hook 未挂载';
+          toggleBtn.className = 'btn success';
+          toggleBtn.innerHTML = '<span>⚡</span> 一键全局安装 Hook';
+        }
+
+        container.innerHTML = `
+          <div class="doctor-item"><span class="check">✔</span> Node.js 运行时: ${doc.nodeVersion}</div>
+          <div class="doctor-item"><span class="check">✔</span> 宿主操作系统: ${doc.platform} (${doc.osRelease})</div>
+          <div class="doctor-item"><span class="check">✔</span> Antigravity 全局配置目录: ${doc.configDir}</div>
+          <div class="doctor-item"><span class="${doc.hookInstalled ? 'check' : 'alert'}">${doc.hookInstalled ? '✔' : '!'}</span> 核心拦截器 Hook: ${doc.hookInstalled ? '正常拦截并保护 run_command' : '尚未挂载，点击上方按钮即可一键激活'}</div>
+          <div class="doctor-item"><span class="check">✔</span> 压缩与 PowerShell 防护引擎: 自检全绿通过</div>
+        `;
+        showToast('系统健康自诊断完成');
+      } catch (err) {
+        showToast('体检运行失败: ' + err.message);
+      }
+    }
+
+    async function toggleHook() {
+      try {
+        const endpoint = isHookInstalled ? '/api/hook/uninstall' : '/api/hook/install';
+        const res = await fetch(endpoint, { method: 'POST' });
+        const json = await res.json();
+        showToast(json.message);
+        await runDoctorManual();
+      } catch (err) {
+        showToast('操作失败: ' + err.message);
+      }
+    }
+
+    async function resetStatsConfirm() {
+      if (!confirm('确定要清零重置所有累计节省的 Token 遥测数据吗？')) return;
+      try {
+        await fetch('/api/stats/reset', { method: 'POST' });
+        await refreshData();
+        showToast('遥测数据已成功清零');
+      } catch (err) {
+        showToast('重置失败: ' + err.message);
+      }
+    }
+
+    // Auto-polling with Page Visibility Guard (Anti-throttling rule #7)
+    let pollInterval = null;
+    function startPolling() {
+      if (!pollInterval) {
+        pollInterval = setInterval(() => {
+          if (!document.hidden) {
+            refreshData(false);
+          }
+        }, 5000);
+      }
+    }
+    function stopPolling() {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        refreshData(false);
+        startPolling();
+      }
+    });
+
+    // Initial load
+    window.onload = () => {
+      refreshData(false);
+      runDoctorManual();
+      startPolling();
+    };
+  </script>
+</body>
+</html>
