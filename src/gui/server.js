@@ -9,7 +9,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { getStats, resetStats } = require('../core/telemetry');
+const { getStats, resetStats, getStatsFilePath } = require('../core/telemetry');
 
 const PORT = parseInt(process.env.AGY_COMPRESSOR_PORT || '4012', 10);
 const HOST = '127.0.0.1';
@@ -69,6 +69,46 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api/stats' && method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(getStats()));
+    return;
+  }
+
+  // 3b. Stats SSE Stream API (Real-time Push via fs.watch & 2s tick)
+  if (pathname === '/api/stats/stream' && method === 'GET') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.write('retry: 2000\n\n');
+
+    const pushStats = () => {
+      try {
+        const stats = getStats(true);
+        res.write(`data: ${JSON.stringify(stats)}\n\n`);
+      } catch (_) {}
+    };
+
+    pushStats();
+
+    const statsFile = getStatsFilePath();
+    let watcher = null;
+    try {
+      if (fs.existsSync(statsFile)) {
+        watcher = fs.watch(statsFile, () => {
+          pushStats();
+        });
+      }
+    } catch (_) {}
+
+    const interval = setInterval(pushStats, 3000);
+
+    req.on('close', () => {
+      clearInterval(interval);
+      if (watcher) {
+        try { watcher.close(); } catch (_) {}
+      }
+    });
     return;
   }
 

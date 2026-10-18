@@ -1,12 +1,18 @@
 /**
  * AGY PreToolUse Hook Implementation
- * Intercepts run_command and applies PowerShell escaping fixes and automated stream compaction.
+ * Intercepts run_command, view_file, and grep_search.
+ * Features:
+ * 1. PowerShell escaping fixes & alias normalization.
+ * 2. Process execution wrapper (agy-exec-wrapper) preserving exit codes 100%.
+ * 3. Parameter window narrow-down for lockfiles & giant files in view_file.
  */
 
 const path = require('node:path');
 const { fixPowerShellCommandEscaping } = require('../core/powershell');
-const { recordPowerShellFix } = require('../core/telemetry');
+const { isLockfilePath } = require('../core/headroom');
+const { recordPowerShellFix, recordSavings } = require('../core/telemetry');
 
+const WRAPPER_PATH = path.resolve(__dirname, '../../bin/agy-exec-wrapper.js');
 const STREAM_FILTER_PATH = path.resolve(__dirname, 'stream-filter.js');
 
 // Broad developer CLI tools that produce terminal noise, ANSI sequences, progress bars, or verbose logs
@@ -21,13 +27,14 @@ function handlePreToolUse(payload, options = {}) {
   const toolName = toolCall.name || '';
   const args = toolCall.args || {};
 
+  // 1. Intercept run_command
   if (toolName === 'run_command') {
     const rawCmd = args.CommandLine || '';
     if (!rawCmd) {
       return { decision: 'allow' };
     }
 
-    // 1. Fix Windows PowerShell escaping & alias traps
+    // Windows PowerShell escaping & alias traps fix
     let optimizedCmd = fixPowerShellCommandEscaping(rawCmd, options);
     const hasEscapingFix = optimizedCmd !== rawCmd;
 
@@ -35,15 +42,17 @@ function handlePreToolUse(payload, options = {}) {
       recordPowerShellFix();
     }
 
-    // 2. Automated High-Noise Stream Compaction (Active by default unless explicitly disabled)
+    // High-Noise Command wrapping via Execution Wrapper
     const shouldWrap = options.wrapHighNoiseCommands !== false;
-    if (shouldWrap && !optimizedCmd.includes('stream-filter.js')) {
-      const isHighNoise = HIGH_NOISE_COMMANDS_REGEX.test(rawCmd);
-      // Avoid breaking existing file redirections (> or >> or Out-File) or existing pipes to pager/stream-filter
-      const hasOutputRedirection = />|Out-File|Set-Content/i.test(optimizedCmd);
-      const hasExistingFilter = /\|\s*node\s+.*stream-filter/i.test(optimizedCmd);
+    const hasExistingWrapper = optimizedCmd.includes('agy-exec-wrapper.js') || optimizedCmd.includes('stream-filter.js');
+    const isHighNoise = HIGH_NOISE_COMMANDS_REGEX.test(rawCmd);
 
-      if (isHighNoise && !hasOutputRedirection && !hasExistingFilter) {
+    if (shouldWrap && isHighNoise && !hasExistingWrapper) {
+      const useWrapper = options.usePipeFilter !== true;
+      if (useWrapper) {
+        const wrapperPathEscaped = WRAPPER_PATH.replace(/\\/g, '/');
+        optimizedCmd = `node "${wrapperPathEscaped}" -- ${optimizedCmd}`;
+      } else {
         const filterPathEscaped = STREAM_FILTER_PATH.replace(/\\/g, '/');
         optimizedCmd = `${optimizedCmd} | node "${filterPathEscaped}"`;
       }
@@ -56,6 +65,30 @@ function handlePreToolUse(payload, options = {}) {
           CommandLine: optimizedCmd
         }
       };
+    }
+  }
+
+  // 2. Intercept view_file: Narrow giant lockfiles and minified assets
+  if (toolName === 'view_file') {
+    const targetFile = args.AbsolutePath || args.TargetFile || args.path || '';
+    if (targetFile && typeof targetFile === 'string') {
+      const base = path.basename(targetFile).toLowerCase();
+      const isLockfileOrMin = isLockfilePath(base) || /\.(min\.js|min\.css|map|lockb?)$/i.test(base);
+
+      // If viewing a lockfile or minified file without explicitly requesting line boundaries
+      if (isLockfileOrMin && !args.StartLine && !args.EndLine) {
+        if (options.recordTelemetry !== false) {
+          recordSavings('headroom', 3000, 4000, { filename: base, note: 'auto_narrow_lockfile' });
+        }
+        return {
+          decision: 'allow',
+          overwrite: {
+            ...args,
+            StartLine: 1,
+            EndLine: 200
+          }
+        };
+      }
     }
   }
 

@@ -5,6 +5,8 @@
  * source code diffs and Git merge conflict markers.
  */
 
+const { storeChunk } = require('./chunk-store');
+
 const LOCKFILE_NAMES = new Set([
   'package-lock.json',
   'yarn.lock',
@@ -90,9 +92,14 @@ function foldLockfiles(text, options = {}) {
         const deletions = (section.match(/^-[^-]/gm) || []).length;
 
         const lockfileName = [fileA, fileB].find(f => isLockfilePath(f)) || 'lockfile';
+        let chunkNotice = '';
+        try {
+          const chunkId = storeChunk(section, { type: 'lockfile_diff', filename: lockfileName });
+          if (chunkId) chunkNotice = ` [CCR Chunk: ${chunkId}]`;
+        } catch (_) {}
         return [
           ...headerLines,
-          `@@ -1,${lines.length} +1,${lines.length} @@ [Lockfile diff folded: ${lockfileName} (+${additions} -${deletions} lines omitted for context savings)]`
+          `@@ -1,${lines.length} +1,${lines.length} @@ [Lockfile diff folded: ${lockfileName} (+${additions} -${deletions} lines omitted for context savings)${chunkNotice}]`
         ].join(newline);
       });
 
@@ -113,9 +120,14 @@ function foldLockfiles(text, options = {}) {
       if (lines.length > 50) {
         const head = lines.slice(0, 20);
         const tail = lines.slice(-10);
+        let chunkNotice = '';
+        try {
+          const chunkId = storeChunk(text, { type: 'lockfile_content', filename: options.filename });
+          if (chunkId) chunkNotice = ` [CCR Chunk: ${chunkId}]`;
+        } catch (_) {}
         return [
           ...head,
-          `... [${lines.length - 30} lines folded from ${options.filename} for context compression] ...`,
+          `... [${lines.length - 30} lines folded from ${options.filename} for context compression${chunkNotice}] ...`,
           ...tail
         ].join(newline);
       }
@@ -159,10 +171,16 @@ function foldStructuredData(text, options = {}) {
       );
 
       if (isHomogeneous) {
+        let chunkNotice = '';
+        try {
+          const chunkId = storeChunk(text, { type: 'json_array', count: parsed.length });
+          if (chunkId) chunkNotice = ` [CCR Chunk: ${chunkId}]`;
+        } catch (_) {}
+
         const head = parsed.slice(0, headCount);
         const tail = parsed.slice(-tailCount);
         const placeholder = {
-          _folded_summary: `[SmartCrusher: ${parsed.length - headCount - tailCount} homogeneous items folded. Total items: ${parsed.length}]`,
+          _folded_summary: `[SmartCrusher: ${parsed.length - headCount - tailCount} homogeneous items folded. Total items: ${parsed.length}.${chunkNotice}]`,
           _schema_keys: Object.keys(parsed[0])
         };
 

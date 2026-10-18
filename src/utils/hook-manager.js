@@ -143,7 +143,7 @@ function installHook(target = 'global') {
     enabled: true,
     PreToolUse: [
       {
-        matcher: 'run_command',
+        matcher: 'run_command|view_file|grep_search',
         hooks: [
           {
             type: 'command',
