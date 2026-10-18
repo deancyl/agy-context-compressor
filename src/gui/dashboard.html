@@ -361,28 +361,28 @@
 
         // Modules
         const m = data.modules || {};
-        const total = data.savedTokens || 1;
         const rtkTok = (m.rtk && m.rtk.savedTokens) || 0;
         const hrTok = (m.headroom && m.headroom.savedTokens) || 0;
         const scTok = (m.schema && m.schema.savedTokens) || 0;
         const czTok = (m.cacheZone && m.cacheZone.savedTokens) || 0;
         const czHits = (m.cacheZone && m.cacheZone.hits) || 0;
         const psTok = (m.powershell && m.powershell.savedTokens) || 0;
+        const directTotal = (rtkTok + hrTok + scTok + psTok) || 1;
 
         document.getElementById('rtkTokens').innerText = rtkTok.toLocaleString() + ' Tokens';
-        document.getElementById('rtkSub').innerText = `占比 ${((rtkTok / total) * 100).toFixed(1)}% | 触发 ${(m.rtk && m.rtk.invocations) || 0} 次`;
+        document.getElementById('rtkSub').innerText = `去噪贡献: ${((rtkTok / directTotal) * 100).toFixed(1)}% | 触发 ${(m.rtk && m.rtk.invocations) || 0} 次`;
 
         document.getElementById('headroomTokens').innerText = hrTok.toLocaleString() + ' Tokens';
-        document.getElementById('headroomSub').innerText = `占比 ${((hrTok / total) * 100).toFixed(1)}% | 触发 ${(m.headroom && m.headroom.invocations) || 0} 次`;
+        document.getElementById('headroomSub').innerText = `折叠贡献: ${((hrTok / directTotal) * 100).toFixed(1)}% | 触发 ${(m.headroom && m.headroom.invocations) || 0} 次`;
 
         document.getElementById('schemaTokens').innerText = scTok.toLocaleString() + ' Tokens';
-        document.getElementById('schemaSub').innerText = `占比 ${((scTok / total) * 100).toFixed(1)}%`;
+        document.getElementById('schemaSub').innerText = `已对齐 ${(m.schema && m.schema.alignedToolsCount) || 14} 个参数字典 | 锁定前缀`;
 
         document.getElementById('cacheZoneTokens').innerText = czTok.toLocaleString() + ' Tokens';
-        document.getElementById('cacheZoneSub').innerText = `前缀锁: 活跃 | 固化命中 ${czHits} 次`;
+        document.getElementById('cacheZoneSub').innerText = `锁定命中率: ${kvRatio}% | 固化保护 ${czHits} 轮`;
 
         document.getElementById('psTokens').innerText = psTok.toLocaleString() + ' Tokens';
-        document.getElementById('psSub').innerText = `已修复 Windows 语法陷阱 ${(m.powershell && m.powershell.fixedCommandsCount) || 0} 次`;
+        document.getElementById('psSub').innerText = `已拦截自愈 ${(m.powershell && m.powershell.fixedCommandsCount) || 0} 次语法陷阱 (规避报错重试)`;
 
         // Recent events
         const list = document.getElementById('eventsList');
