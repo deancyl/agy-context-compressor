@@ -276,6 +276,15 @@
       </div>
       <div class="module-card">
         <div class="module-header">
+          <div class="module-name">Card 4: llmtrim 会话固化</div>
+          <span class="module-tag">Cache-Zone</span>
+        </div>
+        <div class="module-desc">多轮前缀字节级固化，锁定 Google Gemini 原生 KV Cache；双边界 True LRU 内存防护。</div>
+        <div id="cacheZoneTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
+        <div id="cacheZoneSub" class="metric-sub">前缀锁: 活跃 | 固化命中 0 次</div>
+      </div>
+      <div class="module-card">
+        <div class="module-header">
           <div class="module-name">Card 5: PowerShell Guard</div>
           <span class="module-tag">Windows Guard</span>
         </div>
@@ -341,6 +350,8 @@
         const rtkTok = (m.rtk && m.rtk.savedTokens) || 0;
         const hrTok = (m.headroom && m.headroom.savedTokens) || 0;
         const scTok = (m.schema && m.schema.savedTokens) || 0;
+        const czTok = (m.cacheZone && m.cacheZone.savedTokens) || 0;
+        const czHits = (m.cacheZone && m.cacheZone.hits) || 0;
         const psTok = (m.powershell && m.powershell.savedTokens) || 0;
 
         document.getElementById('rtkTokens').innerText = rtkTok.toLocaleString() + ' Tokens';
@@ -351,6 +362,9 @@
 
         document.getElementById('schemaTokens').innerText = scTok.toLocaleString() + ' Tokens';
         document.getElementById('schemaSub').innerText = `占比 ${((scTok / total) * 100).toFixed(1)}%`;
+
+        document.getElementById('cacheZoneTokens').innerText = czTok.toLocaleString() + ' Tokens';
+        document.getElementById('cacheZoneSub').innerText = `前缀锁: 活跃 | 固化命中 ${czHits} 次`;
 
         document.getElementById('psTokens').innerText = psTok.toLocaleString() + ' Tokens';
         document.getElementById('psSub').innerText = `已修复 Windows 语法陷阱 ${(m.powershell && m.powershell.fixedCommandsCount) || 0} 次`;
@@ -402,7 +416,8 @@
           <div class="doctor-item"><span class="check">✔</span> 宿主操作系统: ${doc.platform} (${doc.osRelease})</div>
           <div class="doctor-item"><span class="check">✔</span> Antigravity 全局配置目录: ${doc.configDir}</div>
           <div class="doctor-item"><span class="${doc.hookInstalled ? 'check' : 'alert'}">${doc.hookInstalled ? '✔' : '!'}</span> 核心拦截器 Hook: ${doc.hookInstalled ? '正常拦截并保护 run_command' : '尚未挂载，点击上方按钮即可一键激活'}</div>
-          <div class="doctor-item"><span class="check">✔</span> 压缩与 PowerShell 防护引擎: 自检全绿通过</div>
+          <div class="doctor-item"><span class="check">✔</span> Card 4: llmtrim Cache-Zone: 会话前缀字节级固化已激活 (True LRU Bounded)</div>
+          <div class="doctor-item"><span class="check">✔</span> 核心压缩与 PowerShell 防护引擎: 自检全绿通过</div>
         `;
         showToast('系统健康自诊断完成');
       } catch (err) {

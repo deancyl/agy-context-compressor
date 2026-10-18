@@ -41,7 +41,7 @@ test('handlePreToolUse: leaves clean commands or non-run_command tools untouched
     toolCall: {
       name: 'run_command',
       args: {
-        CommandLine: 'git status'
+        CommandLine: 'echo "hello world"'
       }
     }
   };

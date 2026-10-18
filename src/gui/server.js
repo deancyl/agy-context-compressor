@@ -16,64 +16,18 @@ const HOST = '127.0.0.1';
 const DASHBOARD_HTML_PATH = path.join(__dirname, 'dashboard.html');
 const HOOK_RUNNER_PATH = path.resolve(__dirname, '..', 'hooks', 'hook-runner.js');
 
-function getGlobalHooksPath() {
-  const home = os.homedir();
-  return path.join(home, '.gemini', 'config', 'hooks.json');
-}
+const { isHookInstalled, installHook, uninstallHook, verifyHookExecution, getHooksPath } = require('../utils/hook-manager');
 
 function checkHookStatus() {
-  const hooksFile = getGlobalHooksPath();
-  if (!fs.existsSync(hooksFile)) return false;
-  try {
-    const cfg = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
-    return Boolean(cfg['agy-context-compressor'] && cfg['agy-context-compressor'].enabled !== false);
-  } catch (_) {
-    return false;
-  }
+  return isHookInstalled('global');
 }
 
 function installGlobalHook() {
-  const hooksFile = getGlobalHooksPath();
-  const dir = path.dirname(hooksFile);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-  let hooksConfig = {};
-  if (fs.existsSync(hooksFile)) {
-    try {
-      hooksConfig = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
-    } catch (_) {}
-  }
-
-  const hookCommand = `node "${HOOK_RUNNER_PATH.replace(/\\/g, '/')}" pre-tool-use`;
-  hooksConfig['agy-context-compressor'] = {
-    enabled: true,
-    PreToolUse: [
-      {
-        matcher: 'run_command',
-        hooks: [
-          {
-            type: 'command',
-            command: hookCommand,
-            timeout: 10
-          }
-        ]
-      }
-    ]
-  };
-
-  fs.writeFileSync(hooksFile, JSON.stringify(hooksConfig, null, 2), 'utf8');
+  return installHook('global');
 }
 
 function uninstallGlobalHook() {
-  const hooksFile = getGlobalHooksPath();
-  if (!fs.existsSync(hooksFile)) return;
-  try {
-    const hooksConfig = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
-    if (hooksConfig['agy-context-compressor']) {
-      delete hooksConfig['agy-context-compressor'];
-      fs.writeFileSync(hooksFile, JSON.stringify(hooksConfig, null, 2), 'utf8');
-    }
-  } catch (_) {}
+  return uninstallHook('global');
 }
 
 const server = http.createServer((req, res) => {
