@@ -1,0 +1,30 @@
+{
+  "name": "agy-context-compressor",
+  "version": "1.0.0",
+  "description": "Deterministic lossless context optimization & token compression engine tailored for Google Antigravity (AGY)",
+  "main": "src/index.js",
+  "bin": {
+    "agy-compressor": "./bin/agy-compressor.js"
+  },
+  "keywords": [
+    "antigravity",
+    "agy",
+    "context-compression",
+    "token-optimization",
+    "prompt-cache",
+    "powershell-guard",
+    "rtk",
+    "headroom"
+  ],
+  "author": "deancyl",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "doctor": "node bin/agy-compressor.js doctor",
+    "install-global": "node bin/agy-compressor.js install --global",
+    "uninstall-global": "node bin/agy-compressor.js uninstall --global"
+  }
+}

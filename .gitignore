@@ -1,0 +1,8 @@
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+.system_generated/
+.gemini/
+coverage/
+dist/
