@@ -1,7 +1,7 @@
 /**
  * Telemetry & Token Savings Tracker for AGY Context Compressor
  * 100% native Node.js zero dependencies.
- * Tracks character savings, estimated token savings, and USD cost reduction.
+ * Multi-process real-time safe: tracks character savings, estimated token savings, and USD cost reduction.
  */
 
 const fs = require('node:fs');
@@ -35,7 +35,7 @@ function getStatsFilePath() {
 }
 
 let statsCache = null;
-let persistTimer = null;
+let lastLoadedMtime = 0;
 
 function getInitialStats() {
   const now = new Date().toISOString();
@@ -59,47 +59,69 @@ function getInitialStats() {
   };
 }
 
-function loadStats() {
-  if (statsCache) return statsCache;
+/**
+ * Loads latest stats from disk, detecting any external updates via file modification time.
+ * @param {boolean} [force=false]
+ * @returns {object}
+ */
+function loadStats(force = false) {
   const file = getStatsFilePath();
+  let currentMtime = 0;
+  try {
+    if (fs.existsSync(file)) {
+      currentMtime = fs.statSync(file).mtimeMs;
+    }
+  } catch (_) {}
+
+  // If already in memory and file hasn't been modified externally, return cache
+  if (!force && statsCache && currentMtime > 0 && currentMtime <= lastLoadedMtime) {
+    return statsCache;
+  }
+
   if (fs.existsSync(file)) {
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       statsCache = { ...getInitialStats(), ...data };
       if (!statsCache.modules) statsCache.modules = getInitialStats().modules;
+      lastLoadedMtime = currentMtime;
       return statsCache;
     } catch (e) {
-      // Fallback to fresh stats if corrupt
+      // Fallback
     }
   }
+
   statsCache = getInitialStats();
+  lastLoadedMtime = currentMtime;
   return statsCache;
 }
 
+/**
+ * Synchronously flushes in-memory stats to disk with atomic write.
+ */
 function flushStats() {
   if (!statsCache) return;
   const file = getStatsFilePath();
   try {
-    const tmp = `${file}.tmp_${process.pid}`;
+    const dir = path.dirname(file);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const tmp = `${file}.tmp_${process.pid}_${Date.now()}`;
     fs.writeFileSync(tmp, JSON.stringify(statsCache, null, 2), 'utf8');
     fs.renameSync(tmp, file);
+    try {
+      lastLoadedMtime = fs.statSync(file).mtimeMs;
+    } catch (_) {}
   } catch (err) {
     try {
       fs.writeFileSync(file, JSON.stringify(statsCache, null, 2), 'utf8');
+      lastLoadedMtime = Date.now();
     } catch (_) {}
   }
 }
 
-function schedulePersist() {
-  if (persistTimer) return;
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    flushStats();
-  }, 500);
-}
-
 /**
- * Records savings for a specific module or overall event.
+ * Records savings for a specific module or overall event in real time.
+ * Always reads latest from disk first to merge concurrent updates cleanly.
  * @param {string} moduleName - 'rtk' | 'headroom' | 'schema' | 'powershell'
  * @param {number} deltaChars - Number of characters pruned
  * @param {number} originalChars - Original character count
@@ -108,9 +130,10 @@ function schedulePersist() {
 function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {}) {
   if (typeof deltaChars !== 'number' || deltaChars <= 0) return;
 
-  const stats = loadStats();
+  // Always sync with latest disk state before mutating
+  const stats = loadStats(true);
   const tokens = estimateTokens(deltaChars);
-  const costPerToken = 1.50 / 1000000; // $1.50 per 1M tokens baseline (Gemini / Claude Pro rate)
+  const costPerToken = 1.50 / 1000000; // $1.50 per 1M tokens baseline
 
   stats.totalSavedChars += deltaChars;
   stats.totalOriginalChars += Math.max(originalChars, deltaChars);
@@ -131,7 +154,7 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
     }
   }
 
-  // Keep a small ring buffer of recent events
+  // Ring buffer for recent events
   if (!Array.isArray(stats.recentEvents)) stats.recentEvents = [];
   stats.recentEvents.unshift({
     module: moduleName,
@@ -145,21 +168,23 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
   }
 
   stats.updatedAt = new Date().toISOString();
-  schedulePersist();
+  // Real-time: Flush immediately to disk so other processes see updates instantly!
+  flushStats();
 }
 
 /**
- * Records a PowerShell command syntax fix.
+ * Records a PowerShell command syntax fix in real time.
  */
 function recordPowerShellFix(deltaChars = 0) {
-  const stats = loadStats();
+  const stats = loadStats(true);
   if (!stats.modules.powershell) stats.modules.powershell = { savedChars: 0, savedTokens: 0, fixedCommandsCount: 0 };
   stats.modules.powershell.fixedCommandsCount += 1;
+  stats.updatedAt = new Date().toISOString();
+
   if (deltaChars > 0) {
     recordSavings('powershell', deltaChars, deltaChars + 50);
   } else {
-    stats.updatedAt = new Date().toISOString();
-    schedulePersist();
+    flushStats();
   }
 }
 
@@ -167,17 +192,13 @@ function recordPowerShellFix(deltaChars = 0) {
  * Resets cumulative stats.
  */
 function resetStats() {
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
   statsCache = getInitialStats();
   flushStats();
   return statsCache;
 }
 
-function getStats() {
-  return loadStats();
+function getStats(force = true) {
+  return loadStats(force);
 }
 
 /**
@@ -185,7 +206,7 @@ function getStats() {
  * @returns {string}
  */
 function formatDashboard() {
-  const stats = loadStats();
+  const stats = loadStats(true);
   const fmtNum = (n) => (n || 0).toLocaleString();
   const fmtBytes = (bytes) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -223,7 +244,7 @@ function formatDashboard() {
     `  \x1b[1m\x1b[32m✔ 累计节省字符体积\x1b[0m     : \x1b[1m${fmtBytes(totalChars)}\x1b[0m (${fmtNum(totalChars)} chars)`,
     `  \x1b[1m\x1b[33m✔ 综合平均压缩率\x1b[0m       : \x1b[1m\x1b[33m${ratio}%\x1b[0m [${bar(ratio, 16)}]`,
     `  \x1b[1m\x1b[35m✔ 折合预计减免费用\x1b[0m     : \x1b[1m\x1b[35m$${cost.toFixed(4)} USD\x1b[0m (基于行业大模型基准测算)`,
-    `  \x1b[90m• 累计触发压缩次数     : ${fmtNum(stats.totalInvocations)} 次 | 上次更新: ${new Date(stats.updatedAt).toLocaleTimeString()}\x1b[0m`,
+    `  \x1b[90m• 累计触发压缩次数     : ${fmtNum(stats.totalInvocations)} 次 | 实时更新于: ${new Date(stats.updatedAt).toLocaleTimeString()}\x1b[0m`,
     '',
     '\x1b[1m── 模块级贡献细分 (Module Contribution) ──────────────────────────────────\x1b[0m',
     `  • \x1b[1mCard 1: RTK 终端与测试去噪\x1b[0m    : ${fmtNum(rtkTokens).padStart(9)} Tokens (${rtkPct.padStart(5)}%) [${bar(rtkPct, 12)}]`,

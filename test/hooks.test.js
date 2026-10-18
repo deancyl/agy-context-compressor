@@ -19,6 +19,23 @@ test('handlePreToolUse: rewrites run_command with PowerShell escaping fixes', ()
   assert.ok(response.overwrite.CommandLine.includes('"C:\\data\\\\"'));
 });
 
+test('handlePreToolUse: automatically wraps high-noise test commands with stream-filter.js', () => {
+  const payload = {
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'npm test'
+      }
+    }
+  };
+
+  const response = handlePreToolUse(payload);
+  assert.strictEqual(response.decision, 'allow');
+  assert.ok(response.overwrite);
+  assert.ok(response.overwrite.CommandLine.includes('npm test | node '));
+  assert.ok(response.overwrite.CommandLine.includes('stream-filter.js'));
+});
+
 test('handlePreToolUse: leaves clean commands or non-run_command tools untouched', () => {
   const cleanPayload = {
     toolCall: {
