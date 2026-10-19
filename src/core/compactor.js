@@ -313,7 +313,7 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
     flushActiveRun();
 
     const savedChars = Math.max(0, rawCharsIn - emittedCharsOut);
-    if (savedChars > 0 && opts.recordTelemetry !== false) {
+    if (savedChars >= 10 && opts.recordTelemetry !== false) {
       recordBatchSavings({
         originalChars: rawCharsIn,
         moduleDeltas: {

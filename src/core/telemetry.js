@@ -272,15 +272,26 @@ function recordBatchSavings({ originalChars, moduleDeltas, metadata = {} }) {
 /**
  * Records a PowerShell command syntax fix in real time.
  */
-function recordPowerShellFix(deltaChars = 0) {
+function recordPowerShellFix(deltaChars = 0, metadata = {}) {
   const stats = loadStats(true);
   if (!stats.modules.powershell) stats.modules.powershell = { savedChars: 0, savedTokens: 0, fixedCommandsCount: 0 };
   stats.modules.powershell.fixedCommandsCount += 1;
   stats.updatedAt = new Date().toISOString();
 
   if (deltaChars > 0) {
-    recordSavings('powershell', deltaChars, deltaChars + 50);
+    recordSavings('powershell', deltaChars, deltaChars + 50, metadata);
   } else {
+    const event = {
+      module: 'powershell',
+      savedChars: 50,
+      savedTokens: 13,
+      timestamp: new Date().toISOString(),
+      note: 'auto_healed_syntax_trap',
+      ...metadata
+    };
+    stats.recentEvents.unshift(event);
+    if (stats.recentEvents.length > 20) stats.recentEvents.length = 20;
+    appendEventLog(event);
     flushStats();
   }
 }
@@ -388,9 +399,11 @@ function formatDashboard() {
 
   if (stats.recentEvents && stats.recentEvents.length > 0) {
     lines.push('\x1b[1m── 最近压缩事件 (Recent Events) ──────────────────────────────────────────\x1b[0m');
-    stats.recentEvents.slice(0, 5).forEach((ev, idx) => {
+    stats.recentEvents.slice(0, 8).forEach((ev, idx) => {
       const timeStr = new Date(ev.timestamp).toLocaleTimeString();
-      lines.push(`  ${idx + 1}. [${timeStr}] [${ev.module.toUpperCase()}] 节省 ${fmtNum(ev.savedTokens)} Tokens (${fmtBytes(ev.savedChars)})`);
+      const modLabel = (ev.module || 'rtk').toUpperCase();
+      const detail = ev.note ? ` (${ev.note})` : (ev.command ? ` [${ev.command.slice(0, 28)}]` : '');
+      lines.push(`  ${idx + 1}. [${timeStr}] [${modLabel}] 节省 ${fmtNum(ev.savedTokens)} Tokens (${fmtBytes(ev.savedChars)})${detail}`);
     });
     lines.push('');
   }
