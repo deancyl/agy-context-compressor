@@ -1,21 +1,22 @@
 #!/usr/bin/env node
 /**
- * Model Context Protocol (MCP) Server for AGY
+ * Model Context Protocol (MCP) Server for AGY (2.0)
  * Ultra-low overhead, 100% native Node.js zero dependencies.
  * 
  * Tools:
- * 1. compact_view_file: Lossless context compression for text/code (lockfile/JSON folding).
- * 2. compact_run_command: Denoised terminal command runner (ANSI strip, progress collapse).
+ * 1. compact_view_file: Lossless context compression for text/code (lockfile/JSON folding + lossless source whitespace cleanup).
+ * 2. compact_run_command: Denoised terminal command runner (ANSI strip, progress collapse, test/devops/pkg folding).
  * 3. agy_retrieve_chunk: Headroom CCR reversible chunk retrieval by chunkId.
- * 4. read_code_skeleton: squeez/llmtrim signature-mode code skeleton extractor (75%-85% token savings).
- * 5. compact_search_sandbox: Context Mode FTS5 SQLite BM25 sandboxed search.
+ * 4. read_code_skeleton: AST-grade lexical signature-mode code skeleton extractor with exact [Line start-end] spans.
+ * 5. compact_search_sandbox: Context Mode FTS5 SQLite BM25 sandboxed search (supports single file or directory with merged context windows).
+ * 6. read_repo_map: Aider-style dependency-centrality ranked codebase map.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
 const readline = require('node:readline');
-const { compactOutput, foldLockfiles, foldStructuredData } = require('../core/compactor');
+const { compactOutput, foldLockfiles, foldStructuredData, compactSourceCode } = require('../core/compactor');
 const { fixPowerShellCommandEscaping } = require('../core/powershell');
 const { retrieveChunk } = require('../core/chunk-store');
 const { extractCodeSkeleton, generateRepoMap } = require('../core/skeleton');
@@ -26,7 +27,7 @@ const { recordSavings, recordSchemaAlignment } = require('../core/telemetry');
 const RAW_TOOLS = [
   {
     name: 'compact_view_file',
-    description: 'Reads a text or source code file with deterministic lossless context compression (auto-folds large lockfiles and giant JSON arrays while strictly preserving code diffs and git conflict markers).',
+    description: 'Reads a text or source code file with deterministic lossless context compression (auto-folds large lockfiles, giant JSON arrays, and redundant blank lines while strictly preserving code diffs and git conflict markers).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -84,13 +85,13 @@ const RAW_TOOLS = [
   },
   {
     name: 'read_code_skeleton',
-    description: 'Code Skeleton Mode (Signature Mode): Extracts class structures, method signatures, interfaces, and types from source code while omitting method bodies, reducing token consumption by 75%-85%.',
+    description: 'Code Skeleton Mode (Signature Mode): Extracts class structures, method signatures, arrow functions, interfaces, and types with exact [Line start-end] spans while omitting method bodies, reducing token consumption by 75%-85%.',
     inputSchema: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'Absolute or workspace-relative path to the source code file (.py, .js, .ts, .go, etc.).'
+          description: 'Absolute or workspace-relative path to the source code file (.py, .js, .ts, .go, .rs, .java, .cs, .cpp, etc.).'
         }
       },
       required: ['path']
@@ -98,13 +99,13 @@ const RAW_TOOLS = [
   },
   {
     name: 'compact_search_sandbox',
-    description: 'Context Mode Search Sandbox: Uses an in-memory SQLite FTS5 index to search keywords within a large file or log, returning BM25-ranked matching lines without flooding the main context.',
+    description: 'Context Mode Search Sandbox: Uses an in-memory SQLite FTS5 index to search keywords within a file or directory, returning BM25-ranked matching blocks with merged context lines without flooding the main context.',
     inputSchema: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'File path to search inside.'
+          description: 'File or directory path to search inside.'
         },
         query: {
           type: 'string',
@@ -113,6 +114,10 @@ const RAW_TOOLS = [
         max_results: {
           type: 'integer',
           description: 'Maximum number of matching lines to return (default: 25).'
+        },
+        context_lines: {
+          type: 'integer',
+          description: 'Number of surrounding context lines to include before and after each match (default: 2, max: 5).'
         }
       },
       required: ['path', 'query']
@@ -120,7 +125,7 @@ const RAW_TOOLS = [
   },
   {
     name: 'read_repo_map',
-    description: 'Aider-style AST Codebase Map: Scans a directory and generates a concise, hierarchical map of classes, interfaces, and function signatures with exact line numbers across the codebase (< 1,000 tokens for entire project). Enables jumping straight to the exact line without full-file reading.',
+    description: 'Aider-style AST Codebase Map: Scans a directory and generates a dependency-centrality ranked map of classes, interfaces, and function signatures with exact [Line start-end] spans across the codebase.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -162,10 +167,15 @@ function handleToolCall(name, args) {
 
     let content = foldLockfiles(raw, { filename });
     content = foldStructuredData(content);
+    content = compactSourceCode(content);
 
     const delta = origLen - content.length;
     if (delta > 0) {
-      recordSavings('headroom', delta, origLen, { filename });
+      recordSavings('headroom', delta, origLen, {
+        filename,
+        originalText: raw,
+        compressedText: content
+      });
     }
 
     if (args.maxLines && typeof args.maxLines === 'number') {
@@ -246,7 +256,12 @@ function handleToolCall(name, args) {
     const skeleton = extractCodeSkeleton(raw, filePath);
     const delta = raw.length - skeleton.length;
     if (delta > 0) {
-      recordSavings('aider', delta, raw.length, { filename: path.basename(filePath), type: 'code_skeleton' });
+      recordSavings('aider', delta, raw.length, {
+        filename: path.basename(filePath),
+        type: 'code_skeleton',
+        originalText: raw,
+        compressedText: skeleton
+      });
     }
 
     return {
@@ -262,7 +277,8 @@ function handleToolCall(name, args) {
     const result = searchSandbox({
       targetPath: args.path,
       query: args.query,
-      maxResults: args.max_results || 25
+      maxResults: args.max_results || 25,
+      contextLines: args.context_lines !== undefined ? args.context_lines : 2
     });
 
     if (result.error) {
@@ -272,9 +288,21 @@ function handleToolCall(name, args) {
       };
     }
 
-    const formatted = result.matches.length > 0
-      ? result.matches.map(m => `Line ${m.lineNumber}: ${m.line}`).join('\n')
-      : `No matches found for query "${result.query}" in ${result.totalLines} lines.`;
+    let formatted = '';
+    if (result.mergedBlocks && result.mergedBlocks.length > 0) {
+      formatted = result.mergedBlocks
+        .map(b => {
+          const filePrefix = b.file ? `[${b.file}] ` : '';
+          return `--- ${filePrefix}Match at Line(s) ${b.matchedLines.join(', ')} (Lines ${b.startLine}-${b.endLine}):\n${b.context}`;
+        })
+        .join('\n\n');
+    } else if (result.matches.length > 0) {
+      formatted = result.matches
+        .map(m => m.context ? `--- Match at Line ${m.lineNumber} (Lines ${m.startLine}-${m.endLine}):\n${m.context}` : `Line ${m.lineNumber}: ${m.line}`)
+        .join('\n\n');
+    } else {
+      formatted = `No matches found for query "${result.query}" in ${result.totalLines} lines.`;
+    }
 
     return {
       content: [{
@@ -288,12 +316,16 @@ function handleToolCall(name, args) {
   if (name === 'read_repo_map' || name === 'agy_repo_map') {
     const dir = args.dir_path ? path.resolve(args.dir_path) : process.cwd();
     const res = generateRepoMap(dir, { maxFiles: args.max_files || 40 });
-    const estSavedChars = Math.max(2500, (res.symbolCount || 10) * 85);
-    recordSavings('aider', estSavedChars, estSavedChars + 1000, {
-      note: 'generate_repo_map',
-      fileCount: res.fileCount,
-      symbolCount: res.symbolCount
-    });
+    const actualOrig = res.totalOriginalChars || 0;
+    const mapLen = (res.map || '').length;
+    const actualSaved = actualOrig > mapLen ? (actualOrig - mapLen) : 0;
+    if (actualSaved > 0) {
+      recordSavings('aider', actualSaved, actualOrig, {
+        note: 'generate_repo_map',
+        fileCount: res.fileCount,
+        symbolCount: res.symbolCount
+      });
+    }
     return {
       content: [{
         type: 'text',
@@ -333,7 +365,7 @@ rl.on('line', line => {
           },
           serverInfo: {
             name: 'agy-context-compressor',
-            version: '1.1.0'
+            version: '2.0.0'
           }
         }
       });

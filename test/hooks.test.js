@@ -16,8 +16,11 @@ test('handlePreToolUse: rewrites run_command with PowerShell escaping fixes', ()
   const response = handlePreToolUse(payload, { targetPlatform: 'win32' });
   assert.strictEqual(response.decision, 'allow');
   assert.ok(response.overwrite);
-  assert.ok(response.overwrite.CommandLine.includes('curl.exe '));
-  assert.ok(response.overwrite.CommandLine.includes('"C:\\data\\\\"'));
+  const cmd = response.overwrite.CommandLine;
+  const b64Match = cmd.match(/--base64\s+([A-Za-z0-9+/=]+)/);
+  const actualCmd = b64Match ? Buffer.from(b64Match[1], 'base64').toString('utf8') : cmd;
+  assert.ok(actualCmd.includes('curl.exe '));
+  assert.ok(actualCmd.includes('"C:\\data\\\\"'));
 });
 
 test('handlePreToolUse: automatically wraps high-noise test commands with agy-exec-wrapper.js', () => {
@@ -34,7 +37,7 @@ test('handlePreToolUse: automatically wraps high-noise test commands with agy-ex
   assert.strictEqual(response.decision, 'allow');
   assert.ok(response.overwrite);
   assert.ok(response.overwrite.CommandLine.includes('agy-exec-wrapper.js'));
-  assert.ok(response.overwrite.CommandLine.includes('-- npm test'));
+  assert.ok(response.overwrite.CommandLine.includes('--base64'));
 });
 
 test('handlePreToolUse: supports legacy usePipeFilter mode if specified', () => {
@@ -142,7 +145,7 @@ test('handlePreInvocation: returns zero-pollution ephemeral optimization reminde
   assert.ok(res.injectSteps[0].ephemeralMessage.includes('>300 lines'));
 });
 
-test('handlePreToolUse: auto-narrows unbounded large source files to 1-250 lines', () => {
+test('handlePreToolUse: preserves full source file without silent truncation (zero-downgrade guarantee)', () => {
   const fs = require('node:fs');
   const os = require('node:os');
   const tmpLargeFile = path.join(os.tmpdir(), `agy-test-large-${Date.now()}.js`);
@@ -163,32 +166,29 @@ test('handlePreToolUse: auto-narrows unbounded large source files to 1-250 lines
 
     const res = handlePreToolUse(payload);
     assert.strictEqual(res.decision, 'allow');
-    assert.ok(res.overwrite);
-    assert.strictEqual(res.overwrite.StartLine, 1);
-    assert.strictEqual(res.overwrite.EndLine, 250);
-    // Preserves other tool arguments
-    assert.strictEqual(res.overwrite.toolSummary, 'View large file');
+    // Crucial: normal source code must NOT be silently truncated!
+    assert.strictEqual(res.overwrite, undefined);
   } finally {
     try { fs.unlinkSync(tmpLargeFile); } catch (_) {}
   }
 });
 
-test('handlePreToolUse: caps excessive slice windows to 350 lines', () => {
+test('handlePreToolUse: respects explicit requested slice windows without artificial capping', () => {
   const payload = {
     toolCall: {
       name: 'view_file',
       args: {
         AbsolutePath: 'C:/project/app.js',
         StartLine: 100,
-        EndLine: 800 // 700 lines requested!
+        EndLine: 800 // 700 lines requested by agent
       }
     }
   };
 
   const res = handlePreToolUse(payload);
   assert.strictEqual(res.decision, 'allow');
-  assert.ok(res.overwrite);
-  assert.strictEqual(res.overwrite.EndLine, 100 + 350); // capped to 450
+  // Agent explicitly asked for lines 100..800; must not be secretly truncated to 450
+  assert.strictEqual(res.overwrite, undefined);
 });
 
 test('handlePreToolUse: auto-excludes noise directories on root grep_search', () => {
@@ -209,12 +209,18 @@ test('handlePreToolUse: auto-excludes noise directories on root grep_search', ()
   assert.strictEqual(res.overwrite.pattern, 'handlePreToolUse');
 });
 
-test('HIGH_NOISE_COMMANDS_REGEX: matches custom node, python, and bash script executions', () => {
+test('HIGH_NOISE_COMMANDS_REGEX: matches custom node, python, and test runner executions', () => {
   const { HIGH_NOISE_COMMANDS_REGEX } = require('../src/hooks/pre-tool-use');
   assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('node test_router.js'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('node --test test/*.test.js'));
   assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('node src/index.mjs'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('python -m pytest tests/'));
   assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('python test_suite.py'));
   assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('bash ./run_tests.sh'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('jest --runInBand'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('vitest run'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('playwright test'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('make test'));
   // Does not match harmless syntax checks
   assert.strictEqual(HIGH_NOISE_COMMANDS_REGEX.test('node -c server.js'), false);
 });

@@ -1,14 +1,28 @@
 /**
- * Telemetry & Token Savings Tracker for AGY Context Compressor
+ * Telemetry & Token Savings Tracker for AGY Context Compressor (2.0)
  * 100% native Node.js zero dependencies.
- * Multi-process real-time safe: tracks character savings, estimated token savings, and USD cost reduction.
+ * Multi-process real-time safe: tracks character savings, accurate CJK/English token savings,
+ * and separates direct plugin compression metrics from upstream Google KV Cache telemetry.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-function estimateTokens(input) {
+/**
+ * Bilingual CJK / Code token estimator.
+ * - When given a string, counts CJK characters (~1.25 chars/token) and non-CJK (~3.8 chars/token).
+ * - When given a numeric character delta and optional text samples (originalText, compressedText),
+ *   computes the exact token difference between originalText and compressedText.
+ * @param {string|number} input
+ * @param {string} [originalText]
+ * @param {string} [compressedText]
+ * @returns {number}
+ */
+function estimateTokens(input, originalText = null, compressedText = null) {
+  if (typeof originalText === 'string' && typeof compressedText === 'string') {
+    return Math.max(0, estimateTokens(originalText) - estimateTokens(compressedText));
+  }
   if (typeof input === 'number') {
     return Math.max(0, Math.round(input / 3.8));
   }
@@ -77,9 +91,10 @@ function getInitialStats() {
 /**
  * Loads latest stats from disk, detecting any external updates via file modification time.
  * @param {boolean} [force=false]
+ * @param {boolean} [includeLiveTranscript=false] - Whether to read and parse the live session transcript (only for Dashboard UI)
  * @returns {object}
  */
-function loadStats(force = false) {
+function loadStats(force = false, includeLiveTranscript = false) {
   const file = getStatsFilePath();
   let currentMtime = 0;
   try {
@@ -88,9 +103,12 @@ function loadStats(force = false) {
     }
   } catch (_) {}
 
-  // If already in memory and file hasn't been modified externally, return cache
   if (!force && statsCache && currentMtime > 0 && currentMtime <= lastLoadedMtime) {
-    return statsCache;
+    if (includeLiveTranscript && !statsCache.contextMetrics) {
+      // populate below
+    } else {
+      return statsCache;
+    }
   }
 
   if (fs.existsSync(file)) {
@@ -113,8 +131,9 @@ function loadStats(force = false) {
 
   const isTest = Boolean(process.env.AGY_COMPRESSION_STATS_FILE) || process.env.NODE_ENV === 'test' || Boolean(process.env.NODE_TEST_CONTEXT);
 
-  // Augment with real-time live Antigravity context metrics (read-only inspection of transcript)
-  if (!isTest) {
+  // Augment with real-time live Antigravity context metrics ONLY when explicitly requested (e.g. for GUI dashboard or formatDashboard)
+  // NEVER run expensive transcript file reading on the critical execution path of PreToolUse / PreInvocation hooks!
+  if (!isTest && includeLiveTranscript) {
     try {
       const { getLiveAntigravityMetrics } = require('./cache-zone');
       const live = getLiveAntigravityMetrics();
@@ -125,8 +144,6 @@ function loadStats(force = false) {
         }
         statsCache.modules.cacheZone.upstreamKvCacheTokens = live.totalCacheReadTokens;
         statsCache.modules.cacheZone.hits = live.plannerResponsesCount;
-        statsCache.modules.cacheZone.savedTokens = live.totalCacheReadTokens;
-        statsCache.modules.cacheZone.savedChars = Math.round(live.totalCacheReadTokens * 3.6);
         statsCache.totalContextProcessed = live.totalContextProcessed;
       }
     } catch (_) {}
@@ -161,17 +178,20 @@ function flushStats() {
 
 /**
  * Records savings for a specific module or overall event in real time.
- * @param {string} moduleName - 'rtk' | 'headroom' | 'schema' | 'powershell'
+ * @param {string} moduleName - 'rtk' | 'headroom' | 'schema' | 'powershell' | 'aider' | 'kompact'
  * @param {number} deltaChars - Number of characters pruned
  * @param {number} originalChars - Original character count
- * @param {object} [metadata] - Additional context (e.g. command or filename)
+ * @param {object} [metadata] - Additional context (e.g. command, filename, originalText, compressedText)
  */
 function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {}) {
   if (typeof deltaChars !== 'number' || deltaChars <= 0) return;
 
   const stats = loadStats(true);
-  const tokens = estimateTokens(deltaChars);
-  const costPerToken = 1.00 / 1000000; // Consistent standard baseline: $1.00 per 1M tokens
+  const { originalText, compressedText, ...cleanMeta } = metadata || {};
+  const tokens = (typeof originalText === 'string' && typeof compressedText === 'string')
+    ? estimateTokens(deltaChars, originalText, compressedText)
+    : estimateTokens(deltaChars);
+  const costPerToken = 1.00 / 1000000;
 
   stats.totalSavedChars += deltaChars;
   stats.totalOriginalChars += Math.max(originalChars, deltaChars);
@@ -194,11 +214,11 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
     stats.modules[moduleName].invocations += 1;
   }
   if (moduleName === 'aider') {
-    if (metadata.note === 'generate_repo_map') stats.modules.aider.repoMapCount = (stats.modules.aider.repoMapCount || 0) + 1;
-    if (metadata.type === 'code_skeleton') stats.modules.aider.skeletonsCount = (stats.modules.aider.skeletonsCount || 0) + 1;
+    if (cleanMeta.note === 'generate_repo_map') stats.modules.aider.repoMapCount = (stats.modules.aider.repoMapCount || 0) + 1;
+    if (cleanMeta.type === 'code_skeleton') stats.modules.aider.skeletonsCount = (stats.modules.aider.skeletonsCount || 0) + 1;
   }
   if (moduleName === 'kompact') {
-    stats.modules.kompact.prunedToolOutputsCount = (stats.modules.kompact.prunedToolOutputsCount || 0) + (metadata.prunedCount || 1);
+    stats.modules.kompact.prunedToolOutputsCount = (stats.modules.kompact.prunedToolOutputsCount || 0) + (cleanMeta.prunedCount || 1);
   }
 
   const event = {
@@ -206,7 +226,7 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
     savedChars: deltaChars,
     savedTokens: tokens,
     timestamp: new Date().toISOString(),
-    ...metadata
+    ...cleanMeta
   };
   stats.recentEvents.unshift(event);
   if (stats.recentEvents.length > 20) {
@@ -224,9 +244,11 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
  * @param {object} params
  * @param {number} params.originalChars - Single original text character count
  * @param {object} params.moduleDeltas - e.g. { rtk: 500, powershell: 200, headroom: 300 }
+ * @param {string} [params.originalText]
+ * @param {string} [params.compressedText]
  * @param {object} [params.metadata]
  */
-function recordBatchSavings({ originalChars, moduleDeltas, metadata = {} }) {
+function recordBatchSavings({ originalChars, moduleDeltas, originalText = null, compressedText = null, metadata = {} }) {
   if (typeof originalChars !== 'number' || originalChars <= 0 || !moduleDeltas) return;
 
   let totalDelta = 0;
@@ -238,7 +260,9 @@ function recordBatchSavings({ originalChars, moduleDeltas, metadata = {} }) {
   if (totalDelta <= 0) return;
 
   const stats = loadStats(true);
-  const totalTokens = estimateTokens(totalDelta);
+  const totalTokens = (typeof originalText === 'string' && typeof compressedText === 'string')
+    ? estimateTokens(totalDelta, originalText, compressedText)
+    : estimateTokens(totalDelta);
   const costPerToken = 1.00 / 1000000;
 
   stats.totalSavedChars += totalDelta;
@@ -255,7 +279,7 @@ function recordBatchSavings({ originalChars, moduleDeltas, metadata = {} }) {
   for (const [mod, delta] of Object.entries(moduleDeltas)) {
     if (typeof delta === 'number' && delta > 0) {
       if (!stats.modules[mod]) stats.modules[mod] = { savedChars: 0, savedTokens: 0 };
-      const modTok = estimateTokens(delta);
+      const modTok = Math.round((delta / totalDelta) * totalTokens) || estimateTokens(delta);
       stats.modules[mod].savedChars += delta;
       stats.modules[mod].savedTokens += modTok;
       if (stats.modules[mod].invocations !== undefined) {
@@ -283,7 +307,7 @@ function recordBatchSavings({ originalChars, moduleDeltas, metadata = {} }) {
 }
 
 /**
- * Records a PowerShell command syntax fix in real time.
+ * Records a PowerShell command syntax fix in real time without fabricating saved character counts.
  */
 function recordPowerShellFix(deltaChars = 0, metadata = {}) {
   const stats = loadStats(true);
@@ -296,8 +320,8 @@ function recordPowerShellFix(deltaChars = 0, metadata = {}) {
   } else {
     const event = {
       module: 'powershell',
-      savedChars: 50,
-      savedTokens: 13,
+      savedChars: 0,
+      savedTokens: 0,
       timestamp: new Date().toISOString(),
       note: 'auto_healed_syntax_trap',
       ...metadata
@@ -338,8 +362,8 @@ function resetStats() {
   return statsCache;
 }
 
-function getStats(force = true) {
-  return loadStats(force);
+function getStats(force = true, includeLiveTranscript = true) {
+  return loadStats(force, includeLiveTranscript);
 }
 
 /**
@@ -347,7 +371,7 @@ function getStats(force = true) {
  * @returns {string}
  */
 function formatDashboard() {
-  const stats = loadStats(true);
+  const stats = loadStats(true, true);
   const fmtNum = (n) => (n || 0).toLocaleString();
   const fmtBytes = (bytes) => {
     if (bytes < 1024) return `${bytes} B`;

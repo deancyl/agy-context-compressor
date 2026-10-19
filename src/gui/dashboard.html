@@ -405,7 +405,7 @@
       const rtkTok = (m.rtk && m.rtk.savedTokens) || 0;
       const hrTok = (m.headroom && m.headroom.savedTokens) || 0;
       const scTok = (m.schema && m.schema.savedTokens) || 0;
-      const czTok = (m.cacheZone && m.cacheZone.savedTokens) || 0;
+      const czTok = (m.cacheZone && (m.cacheZone.upstreamKvCacheTokens || m.cacheZone.savedTokens)) || 0;
       const czHits = (m.cacheZone && m.cacheZone.hits) || 0;
       const psTok = (m.powershell && m.powershell.savedTokens) || 0;
       const aiderTok = (m.aider && m.aider.savedTokens) || 0;

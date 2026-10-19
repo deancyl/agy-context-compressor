@@ -19,8 +19,11 @@ test('verifyHookExecution: self-tests live hook runner process', () => {
   assert.strictEqual(result.success, true, `Hook verification failed: ${result.reason}`);
   assert.strictEqual(result.output.decision, 'allow');
   if (process.platform === 'win32') {
-    assert.ok(result.output.overwrite.CommandLine.includes('curl.exe'));
-    assert.ok(result.output.overwrite.CommandLine.includes('C:\\data\\\\'));
+    const cmd = result.output.overwrite.CommandLine;
+    const b64Match = cmd.match(/--base64\s+([A-Za-z0-9+/=]+)/);
+    const actualCmd = b64Match ? Buffer.from(b64Match[1], 'base64').toString('utf8') : cmd;
+    assert.ok(actualCmd.includes('curl.exe'));
+    assert.ok(actualCmd.includes('C:\\data\\\\'));
   }
 });
 

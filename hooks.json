@@ -12,6 +12,13 @@
           }
         ]
       }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node ./src/hooks/hook-runner.js pre-invocation",
+        "timeout": 5
+      }
     ]
   }
 }

@@ -17,7 +17,7 @@ const WRAPPER_PATH = path.resolve(__dirname, '../../bin/agy-exec-wrapper.js');
 const STREAM_FILTER_PATH = path.resolve(__dirname, 'stream-filter.js');
 
 // Broad developer CLI tools that produce terminal noise, ANSI sequences, progress bars, or verbose logs
-const HIGH_NOISE_COMMANDS_REGEX = /(?:^|[;&|\s])(?:git(?:\.exe)?\s+(?:diff|log|status|show|blame|branch)|npm(?:\.cmd)?|npx(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?|bun(?:\.exe)?|deno(?:\.exe)?|pip(?:\.exe)?|poetry(?:\.exe)?|pytest(?:\.exe)?|cargo(?:\.exe)?|go(?:\.exe)?|mvn(?:\.cmd)?|gradle(?:\.bat)?|dotnet(?:\.exe)?|docker(?:\.exe)?|podman(?:\.exe)?|kubectl(?:\.exe)?|terraform(?:\.exe)?|dir|ls|Get-ChildItem|gci|tree|find|findstr|grep|rg|cat|type|Get-Content|gc|tsc(?:\.cmd)?|eslint(?:\.cmd)?|prettier(?:\.cmd)?|ruff(?:\.exe)?|curl(?:\.exe)?|Invoke-WebRequest|iwr|wget|node(?:\.exe)?\s+[\w\.\/\\-]+\.(?:js|mjs|cjs|ts)|python(?:\.exe)?\s+[\w\.\/\\-]+\.py|bash\s+[\w\.\/\\-]+\.sh)\b/i;
+const HIGH_NOISE_COMMANDS_REGEX = /(?:^|[;&|\s])(?:git(?:\.exe)?\s+(?:diff|log|status|show|blame|branch)|npm(?:\.cmd)?|npx(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?|bun(?:\.exe)?|deno(?:\.exe)?|pip(?:\.exe)?|poetry(?:\.exe)?|pytest(?:\.exe)?|cargo(?:\.exe)?|go(?:\.exe)?|mvn(?:\.cmd)?|gradle(?:\.bat)?|dotnet(?:\.exe)?|docker(?:\.exe)?|podman(?:\.exe)?|kubectl(?:\.exe)?|terraform(?:\.exe)?|make|cmake|jest(?:\.cmd)?|vitest(?:\.cmd)?|playwright(?:\.cmd)?|dir|ls|Get-ChildItem|gci|tree|find|findstr|grep|rg|cat|type|Get-Content|gc|tsc(?:\.cmd)?|eslint(?:\.cmd)?|prettier(?:\.cmd)?|ruff(?:\.exe)?|curl(?:\.exe)?|Invoke-WebRequest|iwr|wget|node(?:\.exe)?\s+(?:--test\b|-e\b|[\w\.\/\\-]+\.(?:js|mjs|cjs|ts))|python(?:\.exe)?\s+(?:-m\s+(?:pytest|unittest)\b|-c\b|[\w\.\/\\-]+\.py)|bash\s+[\w\.\/\\-]+\.sh)\b/i;
 
 function handlePreToolUse(payload, options = {}) {
   const toolCall = payload && payload.toolCall;
@@ -53,8 +53,8 @@ function handlePreToolUse(payload, options = {}) {
       if (useWrapper) {
         const wrapperPathEscaped = WRAPPER_PATH.replace(/\\/g, '/');
         const b64 = Buffer.from(optimizedCmd, 'utf8').toString('base64');
-        // Dual embedding: --base64 <b64> -- <cmd> preserves quote integrity and ensures backward compatibility
-        optimizedCmd = `node "${wrapperPathEscaped}" --base64 ${b64} -- ${optimizedCmd}`;
+        // Encapsulate command fully in base64: avoids host shell re-evaluating operators (; && |)
+        optimizedCmd = `node "${wrapperPathEscaped}" --base64 ${b64}`;
       } else {
         const filterPathEscaped = STREAM_FILTER_PATH.replace(/\\/g, '/');
         optimizedCmd = `${optimizedCmd} | node "${filterPathEscaped}"`;
@@ -73,7 +73,8 @@ function handlePreToolUse(payload, options = {}) {
     }
   }
 
-  // 2. Intercept view_file: Narrow giant lockfiles, minified assets, and unbounded large files
+  // 2. Intercept view_file: Narrow giant lockfiles and minified assets
+  // Zero-Downgrade Redline: Never silently truncate normal source files or explicit slices!
   if (toolName === 'view_file') {
     const targetFile = args.AbsolutePath || args.TargetFile || args.path || '';
     if (targetFile && typeof targetFile === 'string') {
@@ -103,49 +104,6 @@ function handlePreToolUse(payload, options = {}) {
             ...args,
             StartLine: 1,
             EndLine: 200
-          }
-        };
-      }
-
-      // Case B: Unbounded view_file on large source files (> 350 lines or > 10KB)
-      // Prevents agent dumping 800-line (~30KB) files into context blindly
-      if (options.autoNarrowLargeFiles !== false && !args.StartLine && !args.EndLine && fs.existsSync(targetFile)) {
-        try {
-          if (fileSize > 10000) {
-            const content = fs.readFileSync(targetFile, 'utf8');
-            const lines = content.split(/\r?\n/);
-            if (lines.length > 350) {
-              const savedChars = Math.max(1000, content.length - lines.slice(0, 250).join('\n').length);
-              if (options.recordTelemetry !== false) {
-                recordSavings('headroom', savedChars, content.length, { filename: base, note: 'auto_narrow_large_source' });
-              }
-              return {
-                decision: 'allow',
-                overwrite: {
-                  ...args,
-                  StartLine: 1,
-                  EndLine: 250
-                }
-              };
-            }
-          }
-        } catch (_) {}
-      }
-
-      // Case C: Excessive slice window (> 400 lines requested at once)
-      if (args.StartLine && args.EndLine && (args.EndLine - args.StartLine > 400)) {
-        const cappedEndLine = args.StartLine + 350;
-        const savedLines = args.EndLine - cappedEndLine;
-        const savedChars = savedLines * 40;
-        if (savedChars > 0 && options.recordTelemetry !== false) {
-          recordSavings('headroom', savedChars, savedChars + 350 * 40, { filename: base, note: 'cap_slice_window' });
-        }
-
-        return {
-          decision: 'allow',
-          overwrite: {
-            ...args,
-            EndLine: cappedEndLine
           }
         };
       }

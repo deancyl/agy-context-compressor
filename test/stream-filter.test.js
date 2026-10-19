@@ -71,3 +71,56 @@ test('createLineStreamFilter: emits uncompressed lines and stack traces immediat
 
   filter.end();
 });
+
+test('createLineStreamFilter: folds giant package-lock.json diff streams into CCR chunk', () => {
+  const emittedChunks = [];
+  const filter = createLineStreamFilter({
+    onEmit: text => emittedChunks.push(text),
+    options: { recordTelemetry: false }
+  });
+
+  filter.write('diff --git a/package-lock.json b/package-lock.json\n');
+  filter.write('index 1122334..5566778 100644\n');
+  filter.write('--- a/package-lock.json\n');
+  filter.write('+++ b/package-lock.json\n');
+  filter.write('@@ -10,12 +10,12 @@\n');
+  for (let i = 0; i < 15; i++) {
+    filter.write(`+    "@pkg/dep-${i}": "^1.0.${i}",\n`);
+  }
+
+  // Still accumulating diff lines
+  assert.strictEqual(emittedChunks.length, 0);
+
+  const summary = filter.end();
+  assert.strictEqual(emittedChunks.length, 1);
+  assert.ok(emittedChunks[0].includes('[Git Diff: package-lock.json diff folded (20 lines)]'));
+  assert.ok(emittedChunks[0].includes('CCR: agy_retrieve_chunk'));
+  assert.ok(summary.savedChars > 0);
+});
+
+test('createLineStreamFilter: never folds lockfile diff with merge conflicts (<<<<<<<)', () => {
+  const emittedChunks = [];
+  const filter = createLineStreamFilter({
+    onEmit: text => emittedChunks.push(text),
+    options: { recordTelemetry: false }
+  });
+
+  filter.write('diff --git a/package-lock.json b/package-lock.json\n');
+  filter.write('index 1122334..5566778 100644\n');
+  filter.write('--- a/package-lock.json\n');
+  filter.write('+++ b/package-lock.json\n');
+  filter.write('@@ -10,12 +10,12 @@\n');
+  filter.write('<<<<<<< HEAD\n');
+  filter.write('+    "version": "1.0.1"\n');
+  filter.write('=======\n');
+  filter.write('+    "version": "2.0.0"\n');
+  filter.write('>>>>>>> feature-branch\n');
+
+  filter.end();
+  // Must NOT fold - conflict markers must be 100% visible
+  const allEmitted = emittedChunks.join('');
+  assert.ok(!allEmitted.includes('diff folded'));
+  assert.ok(allEmitted.includes('<<<<<<< HEAD'));
+  assert.ok(allEmitted.includes('>>>>>>> feature-branch'));
+});
+

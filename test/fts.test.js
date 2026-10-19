@@ -39,3 +39,37 @@ test('searchSandbox: handles missing file or invalid query safely', () => {
   assert.ok(missing.error);
   assert.strictEqual(missing.matches.length, 0);
 });
+
+test('searchSandbox: provides surrounding context snippets when contextLines is specified', () => {
+  const tmpFile = path.join(os.tmpdir(), `agy-test-fts-ctx-${Date.now()}.txt`);
+  const content = [
+    'line 1: import config',
+    'line 2: const db = connect()',
+    'line 3: function handleRequest() {',
+    'line 4:   const user = auth();',
+    'line 5:   return user;',
+    'line 6: }',
+    'line 7: export default handleRequest;'
+  ].join('\n');
+
+  fs.writeFileSync(tmpFile, content, 'utf8');
+
+  try {
+    const result = searchSandbox({
+      targetPath: tmpFile,
+      query: 'handleRequest',
+      maxResults: 5,
+      contextLines: 2
+    });
+
+    assert.ok(result.matches.length >= 1);
+    const m = result.matches[0];
+    assert.ok(m.context, 'context snippet must be provided');
+    assert.ok(m.context.includes('const db = connect()'));
+    assert.ok(m.startLine <= 2);
+    assert.ok(m.endLine >= 4);
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch (_) {}
+  }
+});
+

@@ -61,7 +61,7 @@ const stderrFilter = createLineStreamFilter({
 
 const child = spawn(safeCommand, {
   shell,
-  stdio: ['inherit', 'pipe', 'pipe']
+  stdio: ['ignore', 'pipe', 'pipe']
 });
 
 child.stdout.on('data', chunk => {

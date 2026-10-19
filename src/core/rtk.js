@@ -1,7 +1,10 @@
 /**
- * Card 1: RTK & Token-Saver Engine
+ * Card 1: RTK, Squeez & Lean-CTX Terminal Denoising Engine (2.0)
  * 100% native Node.js zero dependencies.
- * Denoises terminal output, ANSI sequences, progress bars, and test pass logs.
+ *
+ * Denoises terminal output, ANSI sequences, progress bars, test pass logs,
+ * Docker layer pulls, Terraform state refreshes, Kubernetes rollout status,
+ * and package manager (Cargo / npm / pnpm / pip) download/compile spam.
  */
 
 // Comprehensive ANSI Escape Code regex
@@ -24,7 +27,7 @@ const RE_PY_STACK = /^[ \t]*File\s+["'].+["'],\s+line\s+\d+/;
 const RE_C_ERROR = /:\d+:\d+:\s*(?:fatal )?error:/i;
 const RE_RUST_ERROR = /^(?:error(?:\[E\d+\])?:|-->\s+.+:\d+:\d+)/;
 const RE_EXPECTED = /^[ \t]*(?:expected:|actual:|want:|got:)/i;
-const RE_CONFLICT_MARKERS = /^(?:<{7}|={7}|>{7})(?:\s+|$)/m;
+const RE_CONFLICT_MARKERS = /^(?:<{7}|={7}|>{7}|\|{7})(?:\s+|$)/m;
 const RE_DIFF_HEADER = /^(?:diff --git|---|\+\+\+|@@)/;
 
 // Positive indicators for test frameworks
@@ -124,6 +127,31 @@ function isTfRefreshLine(line) {
   return /:\s+Refreshing state\.\.\.(?:\s*\[id=[^\]]+\])?/i.test(trimmed);
 }
 
+function isKubeStatusLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (/(?:error|failed|crashloop|imagepull|evicted|oom|pending|notready|terminating|warning)/i.test(trimmed)) return false;
+  if (/^NAME\s+READY\s+STATUS\s+RESTARTS/i.test(trimmed)) return false;
+  if (/^(?:pod\/)?[\w.-]+\s+\d+\/\d+\s+(?:Running|Completed)\s+\d+\s+[\w.-]+/i.test(trimmed)) return true;
+  if (/^Waiting for (?:deployment|daemon set|statefulset)\b.*?rollout to finish:\s+\d+\s+of\s+\d+\s+updated/i.test(trimmed)) return true;
+  if (/^(?:pod|deployment|service|ingress|job|statefulset)\/[\w.-]+\s+condition met$/i.test(trimmed)) return true;
+  return false;
+}
+
+function isPkgInstallNoiseLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed || /(?:error|err!|warn|failed|vulnerability|audit)/i.test(trimmed)) return false;
+  // Cargo Downloaded / Compiling lines
+  if (/^(?:Downloaded|Compiling|Checking|Fetching)\s+[a-zA-Z0-9_-]+\s+v\d+\.\d+\.\d+/i.test(trimmed)) return true;
+  // npm / pnpm / yarn resolution & fetch lines
+  if (/^(?:npm http fetch\s+200|Progress:\s+resolved\s+\d+|Packages:\s+\+\d+)/i.test(trimmed)) return true;
+  // pip / uv downloading / cached wheel lines
+  if (/^(?:Downloading|Using cached)\s+[a-zA-Z0-9_.-]+-\d+.*\.(?:whl|tar\.gz)/i.test(trimmed)) return true;
+  return false;
+}
+
 /**
  * Positive Test Passes Folding.
  * Inverts matching: strictly matches PASS / ✓ / ok lines and folds runs >= 3,
@@ -144,13 +172,17 @@ function foldTestPasses(text, options = {}) {
     let folded = false;
     const flushRun = () => {
       if (passingRun.length >= 3) {
+        const rawBlock = passingRun.join(newline);
         let chunkNotice = '';
         try {
           const { storeChunk } = require('./chunk-store');
-          const chunkId = storeChunk(passingRun.join(newline), { type: 'test_passes', count: passingRun.length });
+          const chunkId = storeChunk(rawBlock, { type: 'test_passes', count: passingRun.length });
           if (chunkId) chunkNotice = ` [CCR: agy_retrieve_chunk(chunk_id="${chunkId}")]`;
         } catch (_) {}
-        result.push(`[Test suite: ${passingRun.length} passed tests folded (✓ / PASS / ok)]${chunkNotice}`);
+        const foldedWithCcr = `[Test suite: ${passingRun.length} passed tests folded (✓ / PASS / ok)]${chunkNotice}`;
+        const foldedShort = `[Test suite: ${passingRun.length} passed tests folded (✓ / PASS / ok)]`;
+        // Squeez net_win guard: only attach CCR tag if it doesn't exceed rawBlock length
+        result.push(foldedWithCcr.length < rawBlock.length ? foldedWithCcr : foldedShort);
         folded = true;
       } else {
         result.push(...passingRun);
@@ -192,12 +224,6 @@ function cleanDockerOutput(text) {
     const result = [];
     let dockerRun = [];
     let folded = false;
-
-    const isDockerLayerLine = (line) => {
-      const trimmed = line.trim();
-      if (!trimmed || /error|failed/i.test(trimmed)) return false;
-      return /^[0-9a-f]{8,12}:\s+(?:Pulling fs layer|Downloading|Extracting|Verifying Checksum|Download complete|Pull complete|Waiting|Already exists|Layer already exists|Pushing|Pushed)/i.test(trimmed);
-    };
 
     const flushRun = () => {
       if (dockerRun.length >= 4) {
@@ -241,12 +267,6 @@ function cleanTerraformOutput(text) {
     let tfRun = [];
     let folded = false;
 
-    const isTfRefreshLine = (line) => {
-      const trimmed = line.trim();
-      if (!trimmed || /error|failed/i.test(trimmed)) return false;
-      return /:\s+Refreshing state\.\.\.(?:\s*\[id=[^\]]+\])?/i.test(trimmed);
-    };
-
     const flushRun = () => {
       if (tfRun.length >= 3) {
         result.push(`[Terraform: ${tfRun.length} resource state refresh lines folded]`);
@@ -274,13 +294,104 @@ function cleanTerraformOutput(text) {
   }
 }
 
+/**
+ * Cleans repetitive Kubernetes pod / rollout status lines.
+ * @param {string} text
+ * @returns {string}
+ */
+function cleanKubectlOutput(text) {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  if (!text.includes('Running') && !text.includes('Completed') && !text.includes('rollout to finish') && !text.includes('condition met')) {
+    return text;
+  }
+  try {
+    const isCrlf = text.includes('\r\n');
+    const newline = isCrlf ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    const result = [];
+    let kubeRun = [];
+    let folded = false;
+
+    const flushRun = () => {
+      if (kubeRun.length >= 4) {
+        result.push(`[Kubectl: ${kubeRun.length} healthy pods / rollout status lines folded]`);
+        folded = true;
+      } else {
+        result.push(...kubeRun);
+      }
+      kubeRun = [];
+    };
+
+    for (const line of lines) {
+      if (isKubeStatusLine(line)) {
+        kubeRun.push(line);
+      } else {
+        flushRun();
+        result.push(line);
+      }
+    }
+    flushRun();
+
+    if (!folded) return text;
+    return result.join(newline);
+  } catch (err) {
+    return text;
+  }
+}
+
+/**
+ * Cleans repetitive package manager (Cargo / npm / pnpm / pip) download & compilation progress spam.
+ * @param {string} text
+ * @returns {string}
+ */
+function cleanPkgInstallOutput(text) {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  try {
+    const isCrlf = text.includes('\r\n');
+    const newline = isCrlf ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    const result = [];
+    let pkgRun = [];
+    let folded = false;
+
+    const flushRun = () => {
+      if (pkgRun.length >= 4) {
+        result.push(`[Package Manager: ${pkgRun.length} dependency download/compile lines folded]`);
+        folded = true;
+      } else {
+        result.push(...pkgRun);
+      }
+      pkgRun = [];
+    };
+
+    for (const line of lines) {
+      if (isPkgInstallNoiseLine(line)) {
+        pkgRun.push(line);
+      } else {
+        flushRun();
+        result.push(line);
+      }
+    }
+    flushRun();
+
+    if (!folded) return text;
+    return result.join(newline);
+  } catch (err) {
+    return text;
+  }
+}
+
 module.exports = {
   stripAnsi,
   cleanProgressBars,
   foldTestPasses,
   cleanDockerOutput,
   cleanTerraformOutput,
+  cleanKubectlOutput,
+  cleanPkgInstallOutput,
   isPassLine,
   isDockerLayerLine,
-  isTfRefreshLine
+  isTfRefreshLine,
+  isKubeStatusLine,
+  isPkgInstallNoiseLine
 };

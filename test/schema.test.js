@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { sortKeysDeep, alignToolsSchema, slimToolsSchema } = require('../src/core/schema');
+const { sortKeysDeep, alignToolsSchema, slimToolsSchema, slimDescription } = require('../src/core/schema');
 
 test('sortKeysDeep: sorts nested object keys alphabetically', () => {
   const obj = { z: 1, a: 2, m: { y: 10, b: 20 } };
@@ -21,8 +21,8 @@ test('alignToolsSchema: sorts tools by name and sorts parameters', () => {
   assert.deepStrictEqual(Object.keys(aligned[0].parameters.properties), ['b', 'y']);
 });
 
-test('slimToolsSchema: trims verbose markdown examples when exceeding threshold', () => {
-  const longDesc = 'Essential tool for database query. ```sql\nSELECT * FROM giant_table WHERE id = 1;\n```\nExtra verbose padding text here that repeats...';
+test('slimToolsSchema: trims verbose markdown examples while preserving e.g. abbreviations and CRITICAL constraints', () => {
+  const longDesc = 'Path to the file (e.g. /src/index.ts or /app/main.py). Must be an absolute path. ```sql\nSELECT * FROM giant_table WHERE id = 1;\n```\nExtra verbose padding text here that repeats many times to exceed three hundred characters in total length so sentence splitting activates cleanly. CRITICAL: Never pass relative paths.';
   const tools = [
     {
       name: 'db_query',
@@ -38,5 +38,7 @@ test('slimToolsSchema: trims verbose markdown examples when exceeding threshold'
 
   const slimmed = slimToolsSchema(tools, 50); // Set low threshold to trigger
   assert.ok(!slimmed[0].description.includes('```sql'));
-  assert.ok(slimmed[0].description.includes('Essential tool for database query.'));
+  assert.ok(slimmed[0].description.includes('(e.g. /src/index.ts or /app/main.py)'));
+  assert.ok(slimmed[0].description.includes('Must be an absolute path.'));
+  assert.ok(slimmed[0].description.includes('CRITICAL: Never pass relative paths.'));
 });

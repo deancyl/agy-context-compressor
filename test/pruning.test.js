@@ -53,7 +53,7 @@ test('pruneHistoricalToolOutputs: prunes older read-only outputs while keeping r
   assert.strictEqual(res.messages[17].content, longCode);
 });
 
-test('pruneHistoricalToolOutputs: Anti-Downgrade - NEVER prunes errors or failure tracebacks', () => {
+test('pruneHistoricalToolOutputs: Anti-Downgrade - NEVER prunes active errors or failure tracebacks within cooldown', () => {
   const errorTraceback = `
 Traceback (most recent call last):
   File "app.py", line 42, in <module>
@@ -71,9 +71,39 @@ TypeError: Invalid connection state
   ];
 
   const res = pruneHistoricalToolOutputs(messages, { keepRecentToolTurns: 1, recordTelemetry: false });
-  // call_err is historical, but contains 'TypeError' and 'Traceback', so it MUST be exempted!
+  // call_err is within errorCooldownTurns, so it MUST be exempted!
   assert.strictEqual(res.messages[1].content, errorTraceback);
   assert.strictEqual(res.prunedCount, 0);
+});
+
+test('pruneHistoricalToolOutputs: DCP Stage 1 & 2 - deduplicates repeated file reads and supersedes reads before writes', () => {
+  const fileV1 = '// version 1 of server.js\n'.repeat(40);
+  const fileV2 = '// version 2 of server.js\n'.repeat(40);
+
+  const messages = [
+    {
+      role: 'assistant',
+      tool_calls: [{ id: 'read_1', function: { name: 'view_file', arguments: JSON.stringify({ AbsolutePath: '/app/server.js' }) } }]
+    },
+    { role: 'tool', tool_call_id: 'read_1', content: fileV1 },
+    {
+      role: 'assistant',
+      tool_calls: [{ id: 'edit_1', function: { name: 'replace_file_content', arguments: JSON.stringify({ TargetFile: '/app/server.js' }) } }]
+    },
+    { role: 'tool', tool_call_id: 'edit_1', content: 'Successfully updated /app/server.js' },
+    {
+      role: 'assistant',
+      tool_calls: [{ id: 'read_2', function: { name: 'view_file', arguments: JSON.stringify({ AbsolutePath: '/app/server.js' }) } }]
+    },
+    { role: 'tool', tool_call_id: 'read_2', content: fileV2 }
+  ];
+
+  // Even with keepRecentToolTurns = 10, read_1 is superseded by both edit_1 and read_2!
+  const res = pruneHistoricalToolOutputs(messages, { keepRecentToolTurns: 10, recordTelemetry: false });
+  assert.strictEqual(res.prunedCount, 1);
+  assert.ok(res.messages[1].content.includes('[Historical tool output pruned:'));
+  // Latest read (read_2) must remain 100% intact
+  assert.strictEqual(res.messages[5].content, fileV2);
 });
 
 test('pruneHistoricalToolOutputs: reversible retrieval via CCR agy_retrieve_chunk', () => {
