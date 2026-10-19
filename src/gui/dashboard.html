@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AGY 上下文优化与 Token 压缩控制台 (v2.1)</title>
+  <title>AGY 上下文优化与 Token 压缩控制台 (v2.2)</title>
   <style>
     :root {
       --bg: #111214;
@@ -219,7 +219,7 @@
   <div class="container">
     <header>
       <div class="title-area">
-        <h1>🚀 Google Antigravity Context Compressor <span style="font-size: 12px; padding: 2px 8px; background: #282a2d; border-radius: 6px; color: var(--primary);">v2.1</span></h1>
+        <h1>🚀 Google Antigravity Context Compressor <span style="font-size: 12px; padding: 2px 8px; background: #282a2d; border-radius: 6px; color: var(--primary);">v2.2</span></h1>
         <p>简体中文无损上下文优化与 Token 压缩导航控制台 (7-Core Zero-Downgrade Engine)</p>
       </div>
       <div class="status-badges">
@@ -295,12 +295,12 @@
         <div id="savedTokensSub" class="metric-sub">折合输入 Token 消耗减免</div>
       </div>
       <div class="metric-card">
-        <div class="metric-title">直接去噪文本压缩率 <span>⚡</span></div>
+        <div class="metric-title">有效拦截去噪压缩率 <span>⚡</span></div>
         <div id="compressionRatio" class="metric-value">0.0%</div>
         <div class="progress-bar-bg">
           <div id="ratioBar" class="progress-bar-fill"></div>
         </div>
-        <div class="metric-sub">直接文本体积缩减比例 (不含 KV Cache)</div>
+        <div class="metric-sub">有效去噪事件体积缩减比 (排除纯透传)</div>
       </div>
       <div class="metric-card">
         <div class="metric-title">折合减免算力账单 <span>💰</span></div>
@@ -317,7 +317,7 @@
           <div class="module-name">Card 1: RTK + Squeez 终端去噪</div>
           <span class="module-tag">RTK Engine</span>
         </div>
-        <div class="module-desc">ANSI 剥离、\r 进度条合并、PASS 测试正向折叠、Docker/K8s/Cargo/Build 刷屏与重复日志折叠，报错100%保真。</div>
+        <div class="module-desc">ANSI 剥离、行尾空格清洗、PASS 测试折叠、Docker/K8s/Cargo/Build 与 INFO 日志流折叠，报错100%保真。</div>
         <div id="rtkTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="rtkSub" class="metric-sub">占比 0% | 触发 0 次</div>
       </div>
@@ -326,7 +326,7 @@
           <div class="module-name">Card 2: Headroom + TOON 折叠</div>
           <span class="module-tag">Headroom</span>
         </div>
-        <div class="module-desc">依赖锁文件安全折叠、中型 JSON 无损 TOON 矩阵化、巨型 JSON SmartCrusher 采样 + CCR 可逆落盘。冲突标记绝对豁免！</div>
+        <div class="module-desc">依赖锁文件与超大日志收窄、中型 JSON 无损 TOON 矩阵化、巨型 JSON SmartCrusher 采样 + CCR 可逆落盘。</div>
         <div id="headroomTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="headroomSub" class="metric-sub">占比 0% | 触发 0 次</div>
       </div>
@@ -346,7 +346,7 @@
         </div>
         <div class="module-desc">多轮前缀 SHA-256 字节级固化 + Ephemeral 简体中文零污染引导，锁定 Google 原生 KV Cache；双边界 True LRU 防护。</div>
         <div id="cacheZoneTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
-        <div id="cacheZoneSub" class="metric-sub">前缀锁: 活跃 | 固化命中 0 次</div>
+        <div id="cacheZoneSub" class="metric-sub">前缀锁: 活跃 | 固化命中 0 轮</div>
       </div>
       <div class="module-card">
         <div class="module-header">
@@ -362,7 +362,7 @@
           <div class="module-name">Card 6: Aider AST & FTS5 沙盒</div>
           <span class="module-tag">Aider + ContextMode</span>
         </div>
-        <div class="module-desc">词法级括号感知代码骨架（精确标注 [Line start-end]）、中心度排序 Repo Map 与 SQLite FTS5 多文件沙盒检索。</div>
+        <div class="module-desc">大文件检视自动提取词法级 AST 符号大纲（精确标注 [Line start-end]）、中心度 Repo Map 与 SQLite FTS5 检索。</div>
         <div id="aiderTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="aiderSub" class="metric-sub">符号索引 0 次 | 骨架 0 次 | 检索 0 次</div>
       </div>
@@ -386,7 +386,7 @@
         </div>
       </div>
       <div class="panel">
-        <div class="section-title">📜 最近压缩拦截事件流水 (Recent Activity)</div>
+        <div class="section-title">📜 最近有效压缩拦截流水 (Recent Effective Activity)</div>
         <ul id="eventsList" class="event-list">
           <li class="event-item"><span class="event-meta">暂无最近压缩记录</span></li>
         </ul>
@@ -454,7 +454,7 @@
       }
 
       document.getElementById('totalContextTokens').innerText = totalCtx.toLocaleString();
-      document.getElementById('totalContextSub').innerText = `涵盖 ${ctx.plannerResponsesCount || 0} 轮轨迹、思考链与工具输出`;
+      document.getElementById('totalContextSub').innerText = `涵盖 ${ctx.plannerResponsesCount || 0} 轮轨迹 | 当前单轮 ${(ctx.latestTurnTokens || 0).toLocaleString()} Tokens`;
 
       document.getElementById('kvCacheTokens').innerText = kvTokens.toLocaleString();
       document.getElementById('kvCacheSub').innerText = `Prompt Cache 锁定 | 命中率 ${kvRatio}%`;
@@ -471,8 +471,10 @@
       const rtkTok = (m.rtk && m.rtk.savedTokens) || 0;
       const hrTok = (m.headroom && m.headroom.savedTokens) || 0;
       const scTok = (m.schema && m.schema.savedTokens) || 0;
-      const czTok = (m.cacheZone && ((m.cacheZone.savedTokens || 0) + (m.cacheZone.upstreamKvCacheTokens || 0))) || 0;
-      const czHits = (m.cacheZone && m.cacheZone.hits) || 0;
+      // Strictly unify Card 4 with active session kvTokens + verified memo hits (never double-add legacy upstream totals)
+      const memoTok = (m.cacheZone && (m.cacheZone.memoHits || 0) > 0) ? (m.cacheZone.savedTokens || 0) : 0;
+      const czTok = kvTokens + memoTok;
+      const czHits = ctx.plannerResponsesCount || (m.cacheZone && m.cacheZone.hits) || 0;
       const psTok = (m.powershell && m.powershell.savedTokens) || 0;
       const aiderTok = (m.aider && m.aider.savedTokens) || 0;
       const kompactTok = (m.kompact && m.kompact.savedTokens) || 0;
@@ -488,7 +490,7 @@
       document.getElementById('schemaSub').innerText = `已对齐 ${(m.schema && m.schema.alignedToolsCount) || 0} 个工具字典 | 锁定前缀`;
 
       document.getElementById('cacheZoneTokens').innerText = czTok.toLocaleString() + ' Tokens';
-      document.getElementById('cacheZoneSub').innerText = `锁定命中率: ${kvRatio}% | 固化保护 ${czHits} 次`;
+      document.getElementById('cacheZoneSub').innerText = `锁定命中率: ${kvRatio}% | 当前会话固化保护 ${czHits} 轮`;
 
       document.getElementById('psTokens').innerText = psTok.toLocaleString() + ' Tokens';
       document.getElementById('psSub').innerText = `已拦截自愈 ${(m.powershell && m.powershell.fixedCommandsCount) || 0} 次语法陷阱 (规避报错重试)`;
@@ -503,8 +505,9 @@
       if (data.recentEvents && data.recentEvents.length > 0) {
         list.innerHTML = data.recentEvents.map(ev => {
           const time = new Date(ev.timestamp).toLocaleTimeString();
+          const detail = ev.filename ? ` [${ev.filename}]` : (ev.command ? ` [${ev.command.slice(0, 34)}]` : '');
           return `<li class="event-item">
-            <span><strong>[${(ev.module || '').toUpperCase()}]</strong> 节省 ${(ev.savedTokens || 0).toLocaleString()} Tokens (${fmtBytes(ev.savedChars || 0)})</span>
+            <span><strong>[${(ev.module || '').toUpperCase()}]</strong> 节省 ${(ev.savedTokens || 0).toLocaleString()} Tokens (${fmtBytes(ev.savedChars || 0)})${detail}</span>
             <span class="event-meta">${time}</span>
           </li>`;
         }).join('');

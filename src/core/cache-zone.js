@@ -1,12 +1,12 @@
 /**
- * Card 4: llmtrim Cache-Zone Multi-Turn Session Memoization & KV Cache Lock for AGY
+ * Card 4: llmtrim Cache-Zone Multi-Turn Session Memoization & KV Cache Lock for AGY (2.2)
  * 100% native Node.js zero dependencies.
  *
  * Implements:
  * 1. Bounded True LRU Session Memoization (sessionCompressionMemo)
  * 2. SHA-256 byte-stream freezing to prevent upstream Prompt Cache invalidation
  * 3. Live AGY Transcript KV Cache Observability (cache_read_tokens tracking)
- * 4. PreInvocation ephemeral routing guard (protects Gemini Prompt Cache prefix)
+ * 4. Accurate Single-Turn Context Bloat Detection (based strictly on latestTurnTokens, zero false positives after /compact)
  */
 
 const crypto = require('node:crypto');
@@ -44,10 +44,8 @@ function getMemo(sessionId, cacheKey) {
 
   const val = sMap.get(cacheKey);
   if (val !== undefined) {
-    // True LRU refresh inside session
     sMap.delete(cacheKey);
     sMap.set(cacheKey, val);
-    // True LRU refresh for session itself
     sessionCompressionMemo.delete(sessionId);
     sessionCompressionMemo.set(sessionId, sMap);
     return val;
@@ -73,7 +71,6 @@ function setMemo(sessionId, cacheKey, compressed) {
     sMap = new Map();
     sessionCompressionMemo.set(sessionId, sMap);
   } else {
-    // Refresh session order in memo
     sessionCompressionMemo.delete(sessionId);
     sessionCompressionMemo.set(sessionId, sMap);
   }
@@ -116,6 +113,8 @@ function getMemoStats() {
 
 /**
  * Analyzes an Antigravity transcript.jsonl file to extract live upstream KV Cache metrics.
+ * Bloat detection is strictly tied to `latestTurnTokens` (the actual token size of the most recent turn),
+ * preventing false-positive bloat alerts when historical turn count is high but current context is small.
  * @param {string} transcriptPath
  * @returns {object}
  */
@@ -125,7 +124,12 @@ function analyzeTranscriptCache(transcriptPath) {
     totalCacheReadTokens: 0,
     totalOutputTokens: 0,
     plannerResponsesCount: 0,
-    kvCacheHitRatio: 0
+    kvCacheHitRatio: 0,
+    latestTurnTokens: 0,
+    isContextBloated: false,
+    bloatLevel: 'normal',
+    bloatMessage: '上下文体积健康，处于最佳推理区间。',
+    totalContextProcessed: 0
   };
 
   if (!transcriptPath || !fs.existsSync(transcriptPath)) {
@@ -149,7 +153,9 @@ function analyzeTranscriptCache(transcriptPath) {
           result.totalInputTokens += inp;
           result.totalCacheReadTokens += cache;
           result.totalOutputTokens += out;
-          latestTurnTokens = inp + cache;
+          if (inp + cache > 0) {
+            latestTurnTokens = inp + cache;
+          }
         }
       } catch (_) {}
     }
@@ -163,16 +169,17 @@ function analyzeTranscriptCache(transcriptPath) {
   }
 
   result.latestTurnTokens = latestTurnTokens;
-  result.isContextBloated = latestTurnTokens > 80000 || result.plannerResponsesCount > 50;
-  if (latestTurnTokens > 120000 || result.plannerResponsesCount > 100) {
+  // Strictly evaluate current active context window size (latestTurnTokens)
+  result.isContextBloated = latestTurnTokens > 80000;
+  if (latestTurnTokens > 120000) {
     result.bloatLevel = 'severe';
-    result.bloatMessage = `单轮上下文已达 ${latestTurnTokens.toLocaleString()} Tokens (会话已历经 ${result.plannerResponsesCount} 轮)。历史滚雪球严重，强烈建议在输入框使用 /compact 命令压缩历史，或开启新任务。`;
-  } else if (result.isContextBloated) {
+    result.bloatMessage = `单轮活跃上下文已达 ${latestTurnTokens.toLocaleString()} Tokens (当前会话共 ${result.plannerResponsesCount} 轮)。历史滚雪球严重，强烈建议在输入框使用 /compact 命令压缩历史，或开启新任务。`;
+  } else if (latestTurnTokens > 80000) {
     result.bloatLevel = 'elevated';
-    result.bloatMessage = `单轮上下文已达 ${latestTurnTokens.toLocaleString()} Tokens (共 ${result.plannerResponsesCount} 轮)，建议关注历史体积，适时使用 /compact。`;
+    result.bloatMessage = `单轮活跃上下文已达 ${latestTurnTokens.toLocaleString()} Tokens (当前会话共 ${result.plannerResponsesCount} 轮)，建议关注历史体积，适时使用 /compact。`;
   } else {
     result.bloatLevel = 'normal';
-    result.bloatMessage = '上下文体积健康，处于最佳推理区间。';
+    result.bloatMessage = `当前单轮上下文为 ${latestTurnTokens.toLocaleString()} Tokens，体积健康，处于最佳推理区间。`;
   }
 
   result.totalContextProcessed = result.totalInputTokens + result.totalCacheReadTokens + result.totalOutputTokens;
@@ -194,9 +201,9 @@ function findLatestTranscriptPath() {
       const p = path.join(brainDir, entry, '.system_generated', 'logs', 'transcript.jsonl');
       if (fs.existsSync(p)) {
         try {
-          const mtime = fs.statSync(p).mtimeMs;
-          if (mtime > latestMtime) {
-            latestMtime = mtime;
+          const st = fs.statSync(p);
+          if (st.size > 0 && st.mtimeMs > latestMtime) {
+            latestMtime = st.mtimeMs;
             latestPath = p;
           }
         } catch (_) {}

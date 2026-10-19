@@ -1,16 +1,15 @@
 /**
- * Unified Context Compactor Pipeline for AGY (2.1)
+ * Unified Context Compactor Pipeline for AGY (2.2)
  * 100% native Node.js zero dependencies.
  *
  * Integrates:
  * 1. RTK + Squeez + ContextZip Terminal Denoising (ANSI, progress bars, test passes, Docker, Terraform,
- *    Kubectl, Cargo/npm/pip, build asset tables, and consecutive duplicate log folding)
+ *    Kubectl, Cargo/npm/pip, build asset tables, timestamp-normalized duplicate logs, routine INFO/DEBUG bursts,
+ *    and massive directory listings)
  * 2. Headroom Lockfile & 2-Tier Structured JSON Folding (TOON lossless matrix + SmartCrusher CCR)
- * 3. Real-time Block-Aware Line Stream Filter (with git diff lockfile folding & conflict exemption)
- * 4. OpenCode-DCP (Dynamic Context Pruning) 3-Stage Historical Tool Output Condenser:
- *    - Stage 1: Exact Duplicate Read/Output Deduplication
- *    - Stage 2: Supersede Writes (invalidates earlier file reads once the file is edited/written)
- *    - Stage 3: Sliding Window + Cooldown-based Resolved Error Archiving with CCR reversibility
+ * 3. Real-time Block-Aware Line Stream Filter (with trailing padding strip, blank-line collapse, log burst folding,
+ *    dir listing folding, git diff lockfile folding & conflict exemption)
+ * 4. OpenCode-DCP (Dynamic Context Pruning) 3-Stage Historical Tool Output Condenser
  * 5. Extensible Custom Stage Registry & Persistent Preset Manager
  */
 
@@ -28,12 +27,17 @@ const {
   cleanPkgInstallOutput,
   cleanBuildOutput,
   foldDuplicateLines,
+  cleanLogBurstOutput,
+  cleanDirectoryListingOutput,
+  normalizeLogSignature,
   isPassLine,
   isDockerLayerLine,
   isTfRefreshLine,
   isKubeStatusLine,
   isPkgInstallNoiseLine,
   isBuildNoiseLine,
+  isRoutineLogLine,
+  isDirectoryListingLine,
   isProtectedDiagnosticLine
 } = require('./rtk');
 const { foldLockfiles, foldStructuredData, encodeTOON, decodeTOON, compactSourceCode } = require('./headroom');
@@ -53,6 +57,8 @@ const COMPACTOR_PRESETS = {
     cleanPkgInstallOutput: true,
     cleanBuildOutput: true,
     foldDuplicateLines: true,
+    cleanLogBurstOutput: true,
+    cleanDirectoryListingOutput: true,
     cleanPowerShellNoise: true,
     foldLockfiles: true,
     foldStructuredData: true,
@@ -74,6 +80,8 @@ const COMPACTOR_PRESETS = {
     cleanPkgInstallOutput: true,
     cleanBuildOutput: true,
     foldDuplicateLines: true,
+    cleanLogBurstOutput: true,
+    cleanDirectoryListingOutput: true,
     cleanPowerShellNoise: true,
     foldLockfiles: true,
     foldStructuredData: true,
@@ -96,6 +104,8 @@ const COMPACTOR_PRESETS = {
     cleanPkgInstallOutput: false,
     cleanBuildOutput: false,
     foldDuplicateLines: false,
+    cleanLogBurstOutput: false,
+    cleanDirectoryListingOutput: false,
     cleanPowerShellNoise: true,
     foldLockfiles: false,
     foldStructuredData: false,
@@ -111,10 +121,6 @@ const COMPACTOR_PRESETS = {
 // Extensible custom compression stage registry
 const customStages = new Map();
 
-/**
- * Registers a custom compression stage in the pipeline.
- * @param {object} stage - { name: string, module?: string, fn: (text: string, opts: object) => string }
- */
 function registerCompressionStage(stage) {
   if (!stage || typeof stage.name !== 'string' || typeof stage.fn !== 'function') {
     throw new Error('Invalid compression stage: requires { name, fn }');
@@ -126,17 +132,10 @@ function registerCompressionStage(stage) {
   });
 }
 
-/**
- * Unregisters a custom compression stage by name.
- * @param {string} name
- */
 function unregisterCompressionStage(name) {
   return customStages.delete(name);
 }
 
-/**
- * Lists registered custom compression stages.
- */
 function getCompressionStages() {
   return Array.from(customStages.values());
 }
@@ -151,10 +150,6 @@ function getConfigFilePath() {
 let cachedActivePreset = null;
 let cachedConfigMtime = 0;
 
-/**
- * Reads the persisted active preset ('balanced' | 'aggressive' | 'safe').
- * @returns {string}
- */
 function getActivePreset() {
   try {
     const cfgFile = getConfigFilePath();
@@ -174,11 +169,6 @@ function getActivePreset() {
   return 'balanced';
 }
 
-/**
- * Persists the active compression preset ('balanced' | 'aggressive' | 'safe').
- * @param {'balanced'|'aggressive'|'safe'} preset
- * @returns {{ preset: string, path: string }}
- */
 function setActivePreset(preset) {
   const validPreset = COMPACTOR_PRESETS[preset] ? preset : 'balanced';
   const cfgFile = getConfigFilePath();
@@ -192,11 +182,6 @@ function setActivePreset(preset) {
   return { preset: validPreset, path: cfgFile };
 }
 
-/**
- * Normalizes options with presets.
- * @param {object} options
- * @returns {object}
- */
 function resolveOptions(options = {}) {
   const presetName = options.preset || getActivePreset() || 'balanced';
   const base = COMPACTOR_PRESETS[presetName] || COMPACTOR_PRESETS.balanced;
@@ -236,7 +221,7 @@ function compactOutput(text, userOptions = {}, sessionId = null) {
   }
   const psDelta = Math.max(0, beforePs - result.length);
 
-  // 2. RTK & Squeez: Strip ANSI, Progress Bars, DevOps/Test/Pkg/Build folding, and Duplicate Line folding
+  // 2. RTK & Squeez: Strip ANSI, Progress Bars, DevOps/Test/Pkg/Build/Log/Dir folding, and Duplicate Line folding
   const beforeRtk = result.length;
   if (opts.stripAnsi) {
     result = stripAnsi(result);
@@ -264,6 +249,12 @@ function compactOutput(text, userOptions = {}, sessionId = null) {
   }
   if (opts.foldDuplicateLines !== false) {
     result = foldDuplicateLines(result);
+  }
+  if (opts.cleanLogBurstOutput !== false) {
+    result = cleanLogBurstOutput(result);
+  }
+  if (opts.cleanDirectoryListingOutput !== false) {
+    result = cleanDirectoryListingOutput(result);
   }
   let rtkDelta = Math.max(0, beforeRtk - result.length);
 
@@ -324,9 +315,10 @@ function compactOutput(text, userOptions = {}, sessionId = null) {
 /**
  * Creates a real-time sliding line stream filter.
  * Preserves cross-chunk test passes, docker layers, terraform state runs, kubectl status,
- * package manager installs, build asset lines, and git diff lockfile blocks.
+ * package manager installs, build asset lines, routine log bursts, directory listings,
+ * and git diff lockfile blocks.
+ * Also strips PowerShell Format-Table trailing padding spaces and collapses consecutive blank lines.
  * Emits failures and uncompressed lines immediately without lag.
- * Atomically records net savings at stream end without double-counting.
  *
  * @param {object} params
  * @param {(text: string) => void} params.onEmit
@@ -339,11 +331,13 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
   let rawCharsIn = 0;
   let emittedCharsOut = 0;
 
-  let currentRunType = null; // 'test' | 'docker' | 'tf' | 'kube' | 'pkg' | 'build' | 'diff_lockfile' | null
+  let currentRunType = null; // 'test' | 'docker' | 'tf' | 'kube' | 'pkg' | 'build' | 'log_burst' | 'dir_list' | 'diff_lockfile' | null
   let activeRun = [];
   let currentLockfileName = 'lockfile';
   let headroomSavedChars = 0;
   let newlineChar = '\n';
+  let consecutiveBlankCount = 0;
+  let inSourceGitDiff = false;
 
   function isLockfileDiffHeader(line) {
     const match = line.match(/^diff --git\s+(?:"?a\/)?(?:.*\/)?(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum|go\.work\.sum|composer\.lock|poetry\.lock|uv\.lock|bun\.lockb?)\b/i);
@@ -439,6 +433,48 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
         emittedCharsOut += fullText.length;
         onEmit(fullText);
       }
+    } else if (currentRunType === 'log_burst') {
+      if (activeRun.length >= 20 && opts.cleanLogBurstOutput !== false) {
+        const head = activeRun.slice(0, 5);
+        const tail = activeRun.slice(-3);
+        const omittedCount = activeRun.length - 8;
+        let chunkNotice = '';
+        try {
+          const { storeChunk } = require('./chunk-store');
+          const chunkId = storeChunk(activeRun.join(newlineChar), { type: 'routine_logs', count: activeRun.length });
+          if (chunkId) chunkNotice = ` [CCR: agy_retrieve_chunk(chunk_id="${chunkId}")]`;
+        } catch (_) {}
+        const foldedText = [...head, `[Log Stream: ${omittedCount} routine INFO/DEBUG lines folded]${chunkNotice}`, ...tail]
+          .map(l => l + newlineChar)
+          .join('');
+        emittedCharsOut += foldedText.length;
+        onEmit(foldedText);
+      } else {
+        const fullText = activeRun.map(l => l + newlineChar).join('');
+        emittedCharsOut += fullText.length;
+        onEmit(fullText);
+      }
+    } else if (currentRunType === 'dir_list') {
+      if (activeRun.length >= 50 && opts.cleanDirectoryListingOutput !== false) {
+        const head = activeRun.slice(0, 25);
+        const tail = activeRun.slice(-10);
+        const omittedCount = activeRun.length - 35;
+        let chunkNotice = '';
+        try {
+          const { storeChunk } = require('./chunk-store');
+          const chunkId = storeChunk(activeRun.join(newlineChar), { type: 'dir_listing', count: activeRun.length });
+          if (chunkId) chunkNotice = ` [CCR: agy_retrieve_chunk(chunk_id="${chunkId}")]`;
+        } catch (_) {}
+        const foldedText = [...head, `[Directory Listing: ${omittedCount} file entries folded]${chunkNotice}`, ...tail]
+          .map(l => l + newlineChar)
+          .join('');
+        emittedCharsOut += foldedText.length;
+        onEmit(foldedText);
+      } else {
+        const fullText = activeRun.map(l => l + newlineChar).join('');
+        emittedCharsOut += fullText.length;
+        onEmit(fullText);
+      }
     } else if (currentRunType === 'diff_lockfile') {
       if (activeRun.length >= 8 && opts.foldLockfiles !== false) {
         let chunkNotice = '';
@@ -472,15 +508,33 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
     if (opts.cleanProgressBars) line = cleanProgressBars(line);
     if (opts.cleanPowerShellNoise) line = cleanPowerShellNoise(line);
 
-    if (!line.trim() && rawLine.trim()) {
+    if (!line.trim() && rawLine.trim() && !inSourceGitDiff) {
       return;
+    }
+
+    if (isAnyDiffHeader(line)) {
+      inSourceGitDiff = !Boolean(isLockfileDiffHeader(line));
+    }
+
+    // Strip PowerShell Format-Table / console trailing padding spaces (preserve single-space git diff empty context line)
+    if (!inSourceGitDiff || line.length > 1) {
+      line = line.replace(/[ \t]+$/, '');
+    }
+
+    // Collapse multiple consecutive blank lines into at most 1 blank line outside git diffs
+    if (!inSourceGitDiff && line.length === 0) {
+      consecutiveBlankCount += 1;
+      if (consecutiveBlankCount > 1) {
+        return;
+      }
+    } else {
+      consecutiveBlankCount = 0;
     }
 
     // Git Diff streaming state machine for lockfiles
     if (opts.foldLockfiles !== false) {
       if (currentRunType === 'diff_lockfile') {
         if (opts.exemptMergeConflicts !== false && (line.startsWith('<<<<<<<') || line.startsWith('=======') || line.startsWith('>>>>>>>') || line.startsWith('|||||||'))) {
-          // Merge conflict detected inside lockfile! Never fold conflicts - flush as raw!
           const fullText = activeRun.map(l => l + newlineChar).join('');
           emittedCharsOut += fullText.length;
           onEmit(fullText);
@@ -571,6 +625,24 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
       return;
     }
 
+    if (opts.cleanLogBurstOutput !== false && isRoutineLogLine(line)) {
+      if (currentRunType && currentRunType !== 'log_burst') {
+        flushActiveRun();
+      }
+      currentRunType = 'log_burst';
+      activeRun.push(line);
+      return;
+    }
+
+    if (opts.cleanDirectoryListingOutput !== false && isDirectoryListingLine(line)) {
+      if (currentRunType && currentRunType !== 'dir_list') {
+        flushActiveRun();
+      }
+      currentRunType = 'dir_list';
+      activeRun.push(line);
+      return;
+    }
+
     flushActiveRun();
     const toSend = line + newlineChar;
     emittedCharsOut += toSend.length;
@@ -599,7 +671,12 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
     flushActiveRun();
 
     const savedChars = Math.max(0, rawCharsIn - emittedCharsOut);
-    if (savedChars >= 10 && opts.recordTelemetry !== false) {
+    // Only record a telemetry invocation when meaningful denoising occurred (>= 80 chars saved or >= 4% ratio),
+    // preventing 10-byte CRLF pass-throughs on large clean files from diluting compressionRatio or spamming Recent Events!
+    const ratio = rawCharsIn > 0 ? savedChars / rawCharsIn : 0;
+    const isMeaningfulCompression = savedChars >= 80 || (savedChars >= 25 && ratio >= 0.04);
+
+    if (isMeaningfulCompression && opts.recordTelemetry !== false) {
       const hrSaved = Math.min(savedChars, headroomSavedChars);
       const rtkSaved = savedChars - hrSaved;
       const moduleDeltas = {};
@@ -659,19 +736,7 @@ function buildToolCallMap(messages) {
 }
 
 /**
- * OpenCode-DCP (Dynamic Context Pruning) 3-Stage Historical Tool Output Condenser:
- * 1. Stage 1 (Deduplication): If an earlier tool call produced identical output or read the exact same
- *    file+slice as a later tool call, prunes the older duplicate even if inside the recent window.
- * 2. Stage 2 (Supersede Writes): If a file is modified by write/edit/replace/patch at message index W,
- *    any earlier read of that file at index < W is marked superseded and pruned.
- * 3. Stage 3 (Sliding Window + Cooldown-based Resolved Error Archiving):
- *    Prunes older non-error tool outputs outside keepRecentToolTurns, and optionally archives ancient
- *    resolved errors older than errorCooldownTurns when subsequent turns succeeded.
- *    100% of pruned payloads are stored in CCR (agy_retrieve_chunk) for zero-loss reversibility.
- *
- * @param {Array<object>} messages - Full chat completion messages array
- * @param {object} [options]
- * @returns {{ messages: Array<object>, prunedCount: number, savedChars: number, totalToolMessages: number }}
+ * OpenCode-DCP (Dynamic Context Pruning) 3-Stage Historical Tool Output Condenser.
  */
 function pruneHistoricalToolOutputs(messages, options = {}) {
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -749,7 +814,6 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
     const callMeta = msg.tool_call_id ? callMap.get(msg.tool_call_id) : null;
     let pruneReason = null;
 
-    // DCP Stage 1: Duplicate Read of same (file, slice) superseded by a later read
     if (deduplicateReads && callMeta && callMeta.targetFile && /(?:view_file|read_file|compact_view_file)/.test(callMeta.fnName)) {
       const rKey = `${callMeta.targetFile}#${callMeta.sliceKey}`;
       const latestIdx = latestReadIdxByKey.get(rKey);
@@ -758,7 +822,6 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
       }
     }
 
-    // DCP Stage 2: File read superseded by a subsequent write/edit to the same file
     if (!pruneReason && supersedeWrites && callMeta && callMeta.targetFile && /(?:view_file|read_file|compact_view_file)/.test(callMeta.fnName)) {
       const writeIdx = latestWriteIdxByFile.get(callMeta.targetFile);
       if (writeIdx !== undefined && writeIdx > idx) {
@@ -766,7 +829,6 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
       }
     }
 
-    // DCP Stage 3: Sliding window historical pruning
     if (!pruneReason && prunableWindowIndices.has(idx)) {
       const hasError = ERROR_REGEX.test(rawContent);
       if (!hasError) {
@@ -833,7 +895,6 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
 
 /**
  * Runs a comprehensive built-in multi-scenario benchmark verifying compression ratio and zero-downgrade safety.
- * @returns {{ scenarios: Array<object>, totalOriginalChars: number, totalCompressedChars: number, overallRatio: number, allPassed: boolean }}
  */
 function runCompressionBenchmark() {
   const { extractCodeSkeleton } = require('./skeleton');
@@ -968,6 +1029,8 @@ module.exports = {
   cleanPkgInstallOutput,
   cleanBuildOutput,
   foldDuplicateLines,
+  cleanLogBurstOutput,
+  cleanDirectoryListingOutput,
   foldLockfiles,
   foldStructuredData,
   encodeTOON,

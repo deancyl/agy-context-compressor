@@ -4,18 +4,24 @@ process.env.AGY_COMPRESSION_STATS_FILE = path.join(os.tmpdir(), `agy-test-stats-
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { estimateTokens, recordSavings, recordPowerShellFix, resetStats, getStats, formatDashboard } = require('../src/core/telemetry');
+const {
+  estimateTokens,
+  recordSavings,
+  recordPowerShellFix,
+  sanitizeLegacyStats,
+  resetStats,
+  getStats,
+  formatDashboard
+} = require('../src/core/telemetry');
+const { analyzeTranscriptCache } = require('../src/core/cache-zone');
 
 test('estimateTokens: calculates tokens accurately for English/code and CJK', () => {
-  // English ~3.8 chars/token
   const code = 'function helloWorld() { return 42; }'; // 36 chars
   assert.strictEqual(estimateTokens(code), 9);
 
-  // CJK ~1.25 chars/token
   const cjk = '这是一个测试用例'; // 8 CJK chars -> 8 / 1.25 = 6.4 -> 6
   assert.strictEqual(estimateTokens(cjk), 6);
 
-  // Numeric char count
   assert.strictEqual(estimateTokens(380), 100);
 });
 
@@ -37,13 +43,65 @@ test('recordSavings: updates totalSavedChars, savedTokens, and module metrics', 
   assert.ok(stats.savedCostUSD > 0);
 });
 
-test('recordPowerShellFix: increments fixed commands counter', () => {
+test('recordPowerShellFix: increments fixed commands counter without adding 0-token clutter to recentEvents', () => {
   resetStats();
   recordPowerShellFix();
   recordPowerShellFix();
 
   const stats = getStats();
   assert.strictEqual(stats.modules.powershell.fixedCommandsCount, 2);
+  assert.strictEqual(stats.recentEvents.length, 0);
+});
+
+test('sanitizeLegacyStats: cleans polluted cacheZone.savedTokens, test clutter, and diluted compressionRatio', () => {
+  const legacyStats = {
+    totalOriginalChars: 8254866,
+    totalCompressedChars: 7777196,
+    totalSavedChars: 632104,
+    savedTokens: 166520,
+    compressionRatio: 7.7,
+    modules: {
+      cacheZone: {
+        savedChars: 383646496,
+        savedTokens: 106568471,
+        hits: 875,
+        memoHits: 0,
+        upstreamKvCacheTokens: 114400523
+      }
+    },
+    recentEvents: [
+      { module: 'rtk', savedChars: 13, savedTokens: 3, command: 'Get-ChildItem' },
+      { module: 'headroom', savedChars: 14251, savedTokens: 3750, filename: 'agy-test-large-12345.js' },
+      { module: 'rtk', savedChars: 2625, savedTokens: 691, command: 'node test_router.js' }
+    ]
+  };
+
+  const dirty = sanitizeLegacyStats(legacyStats);
+  assert.strictEqual(dirty, true);
+  assert.strictEqual(legacyStats.modules.cacheZone.savedTokens, 0);
+  assert.strictEqual(legacyStats.modules.cacheZone.savedChars, 0);
+  assert.strictEqual(legacyStats.recentEvents.length, 1);
+  assert.strictEqual(legacyStats.recentEvents[0].command, 'node test_router.js');
+  assert.ok(legacyStats.compressionRatio >= 50);
+});
+
+test('analyzeTranscriptCache: does not false-trigger bloat alert when latestTurnTokens is healthy (52,221)', () => {
+  const fs = require('node:fs');
+  const tmpTranscript = path.join(os.tmpdir(), `agy-bloat-test-${Date.now()}.jsonl`);
+  const lines = [];
+  for (let i = 0; i < 120; i++) {
+    lines.push(JSON.stringify({ type: 'PLANNER_RESPONSE', input_tokens: 2221, cache_read_tokens: 50000, output_tokens: 300 }));
+  }
+  fs.writeFileSync(tmpTranscript, lines.join('\n'), 'utf8');
+  try {
+    const res = analyzeTranscriptCache(tmpTranscript);
+    assert.strictEqual(res.plannerResponsesCount, 120);
+    assert.strictEqual(res.latestTurnTokens, 52221);
+    assert.strictEqual(res.isContextBloated, false);
+    assert.strictEqual(res.bloatLevel, 'normal');
+  } finally {
+    try { fs.unlinkSync(tmpTranscript); } catch (_) {}
+  }
 });
 
 test('formatDashboard: renders clean colorized dashboard without throwing', () => {
@@ -67,7 +125,6 @@ test('recordBatchSavings: records originalChars and totalInvocations exactly onc
   resetStats();
   const { recordBatchSavings } = require('../src/core/telemetry');
 
-  // Input of 10,000 characters with savings from 3 modules
   recordBatchSavings({
     originalChars: 10000,
     moduleDeltas: {
@@ -78,15 +135,12 @@ test('recordBatchSavings: records originalChars and totalInvocations exactly onc
   });
 
   const stats = getStats();
-  // Total original characters must be EXACTLY 10000, NOT 30000!
   assert.strictEqual(stats.totalOriginalChars, 10000);
   assert.strictEqual(stats.totalSavedChars, 2000);
   assert.strictEqual(stats.totalCompressedChars, 8000);
-  assert.strictEqual(stats.totalInvocations, 1); // EXACTLY ONCE!
-  // Ratio must be exactly (2000 / 10000) * 100 = 20.0%
+  assert.strictEqual(stats.totalInvocations, 1);
   assert.strictEqual(stats.compressionRatio, 20.0);
 
-  // Modules individually received their exact deltas
   assert.strictEqual(stats.modules.rtk.savedChars, 1000);
   assert.strictEqual(stats.modules.powershell.savedChars, 500);
   assert.strictEqual(stats.modules.headroom.savedChars, 500);

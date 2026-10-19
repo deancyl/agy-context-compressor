@@ -9,7 +9,9 @@ const {
   cleanKubectlOutput,
   cleanPkgInstallOutput,
   cleanBuildOutput,
-  foldDuplicateLines
+  foldDuplicateLines,
+  cleanLogBurstOutput,
+  cleanDirectoryListingOutput
 } = require('../src/core/rtk');
 
 test('stripAnsi: removes color codes and terminal controls', () => {
@@ -93,7 +95,7 @@ test('cleanKubectlOutput & cleanPkgInstallOutput: folds healthy pods and cargo c
   assert.ok(cargoCleaned.includes('Finished dev'));
 });
 
-test('cleanBuildOutput & foldDuplicateLines: folds routine build assets and repeated log lines safely', () => {
+test('cleanBuildOutput & foldDuplicateLines: folds routine build assets and timestamp-similar repeated log lines safely', () => {
   const buildLog = [
     'dist/assets/chunk-1.js   12.40 kB',
     'dist/assets/chunk-2.js   18.10 kB',
@@ -107,13 +109,28 @@ test('cleanBuildOutput & foldDuplicateLines: folds routine build assets and repe
   assert.ok(buildCleaned.includes('✓ built in 1.24s'));
 
   const dupLog = [
-    '[INFO] Waiting for worker heartbeat from cluster node...',
-    '[INFO] Waiting for worker heartbeat from cluster node...',
-    '[INFO] Waiting for worker heartbeat from cluster node...',
-    '[INFO] Waiting for worker heartbeat from cluster node...',
-    '[ERROR] Worker node 3 timed out!'
+    '2026-10-19T15:41:01.000Z [INFO] Waiting for worker heartbeat from cluster node...',
+    '2026-10-19T15:41:02.000Z [INFO] Waiting for worker heartbeat from cluster node...',
+    '2026-10-19T15:41:03.000Z [INFO] Waiting for worker heartbeat from cluster node...',
+    '2026-10-19T15:41:04.000Z [INFO] Waiting for worker heartbeat from cluster node...',
+    '2026-10-19T15:41:05.000Z [ERROR] Worker node 3 timed out!'
   ].join('\n');
   const dupCleaned = foldDuplicateLines(dupLog);
-  assert.ok(dupCleaned.includes('[INFO] Waiting for worker heartbeat from cluster node... [x4 repeated]'));
+  assert.ok(dupCleaned.includes('[x4 repeated]'));
   assert.ok(dupCleaned.includes('[ERROR] Worker node 3 timed out!'));
+});
+
+test('cleanLogBurstOutput & cleanDirectoryListingOutput: folds Get-Content log bursts and Get-ChildItem tables while preserving errors', () => {
+  const logLines = [
+    ...Array.from({ length: 30 }, (_, i) => `2026-10-19T15:40:${String(i).padStart(2, '0')}Z [INFO] Router processed upstream request #${i + 1} latency=${10 + i}ms`),
+    '2026-10-19T15:40:35Z [ERROR] Upstream gateway connection reset by peer (ECONNRESET)',
+    ...Array.from({ length: 25 }, (_, i) => `2026-10-19T15:41:${String(i).padStart(2, '0')}Z [DEBUG] Healthcheck probe completed status=200 seq=${i}`)
+  ].join('\n');
+  const logCleaned = cleanLogBurstOutput(logLines);
+  assert.ok(logCleaned.includes('routine INFO/DEBUG lines folded'));
+  assert.ok(logCleaned.includes('ECONNRESET'));
+
+  const dirLines = Array.from({ length: 65 }, (_, i) => `-a----        2026/10/19     23:41          14208 session_log_${i}.jsonl`).join('\n');
+  const dirCleaned = cleanDirectoryListingOutput(dirLines);
+  assert.ok(dirCleaned.includes('[Directory Listing: 30 file entries folded]'));
 });

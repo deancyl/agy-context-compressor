@@ -242,16 +242,6 @@ server.on('error', err => {
   }
 });
 
-process.on('uncaughtException', err => {
-  try { fs.appendFileSync(path.join(__dirname, 'server-error.log'), `[uncaughtException] ${err.stack || err}\n`); } catch (_) {}
-});
-process.on('unhandledRejection', err => {
-  try { fs.appendFileSync(path.join(__dirname, 'server-error.log'), `[unhandledRejection] ${err.stack || err}\n`); } catch (_) {}
-});
-process.on('exit', code => {
-  try { fs.appendFileSync(path.join(__dirname, 'server-error.log'), `[exit] Code: ${code} at ${new Date().toISOString()}\n`); } catch (_) {}
-});
-
 server.listen(PORT, HOST, () => {
   console.log(`[GUI Server] Listening silently on http://${HOST}:${PORT}`);
 });

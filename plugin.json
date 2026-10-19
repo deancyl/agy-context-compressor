@@ -1,5 +1,5 @@
 {
   "name": "agy-context-compressor",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Deterministic lossless context optimization & token compression engine tailored for Google Antigravity (AGY)"
 }

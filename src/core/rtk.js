@@ -1,11 +1,12 @@
 /**
- * Card 1: RTK, Squeez & ContextZip Terminal Denoising Engine (2.1)
+ * Card 1: RTK, Squeez & ContextZip Terminal Denoising Engine (2.2)
  * 100% native Node.js zero dependencies.
  *
  * Denoises terminal output, ANSI sequences, progress bars, test pass logs,
  * Docker layer pulls, Terraform state refreshes, Kubernetes rollout status,
  * package manager (Cargo / npm / pnpm / pip) download/compile spam,
- * bundler/compiler build progress lines, and consecutive duplicate log lines.
+ * bundler/compiler build progress lines, consecutive/timestamp-similar duplicate log lines,
+ * routine INFO/DEBUG log bursts (from Get-Content *.log), and massive directory listings (Get-ChildItem -Recurse).
  */
 
 // Comprehensive ANSI Escape Code regex
@@ -63,6 +64,61 @@ function isProtectedDiagnosticLine(line) {
   if (RE_EXPECTED.test(trimmed)) return true;
   if (RE_CONFLICT_MARKERS.test(line)) return true;
   if (RE_DIFF_HEADER.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Normalizes a log line by stripping leading timestamps so consecutive timestamped log lines
+ * with identical payloads can be recognized and folded.
+ * @param {string} line
+ * @returns {string}
+ */
+function normalizeLogSignature(line) {
+  if (typeof line !== 'string') return '';
+  return line
+    .trim()
+    .replace(/^\[?\d{4}[-/]\d{2}[-/]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?\s*/i, '')
+    .replace(/^\[?\d{2}:\d{2}:\d{2}(?:\.\d+)?\]?\s*/, '');
+}
+
+/**
+ * Checks if a line is a routine non-error INFO/DEBUG/TRACE log line.
+ * Never matches any line containing error, warn, fail, exception, or stack traces.
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isRoutineLogLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.length < 12) return false;
+  if (isProtectedDiagnosticLine(line)) return false;
+  if (/\b(?:error|err|warn|warning|fail|failed|fatal|panic|exception|traceback|critical|denied|refused|timeout|invalid)\b/i.test(trimmed)) {
+    return false;
+  }
+  // Matches standard timestamped or leveled routine logs: [INFO], [DEBUG], [TRACE], INFO:, level="info", etc.
+  if (/(?:^|\s)(?:\[(?:INFO|DEBUG|TRACE|VERBOSE)\]|(?:INFO|DEBUG|TRACE):|level=(?:"?(?:info|debug|trace)"?))\b/i.test(trimmed)) {
+    return true;
+  }
+  // Matches ISO timestamped log lines without error keywords
+  if (/^\[?\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\]?\s+/i.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Checks if a line is a standard PowerShell Get-ChildItem / dir / Unix ls -l row.
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isDirectoryListingLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  // PowerShell Get-ChildItem Mode row: "d----   2026/10/19  14:20         1234 filename" or "-a---l  10/19/2026 ..."
+  if (/^[d-][a-z-]{4,5}\s+\d{2,4}[/-]\d{1,2}[/-]\d{1,4}\s+\d{1,2}:\d{2}/i.test(trimmed)) return true;
+  // Unix ls -la row: "drwxr-xr-x 2 user group 4096 Oct 19 14:20 filename"
+  if (/^[d\-lcbps][rwxstST-]{9}[+@.]?\s+\d+\s+\S+\s+\S+\s+\d+\s+/.test(trimmed)) return true;
   return false;
 }
 
@@ -156,11 +212,8 @@ function isPkgInstallNoiseLine(line) {
   if (typeof line !== 'string') return false;
   const trimmed = line.trim();
   if (!trimmed || /(?:error|err!|warn|failed|vulnerability|audit)/i.test(trimmed)) return false;
-  // Cargo Downloaded / Compiling lines
   if (/^(?:Downloaded|Compiling|Checking|Fetching)\s+[a-zA-Z0-9_-]+\s+v\d+\.\d+\.\d+/i.test(trimmed)) return true;
-  // npm / pnpm / yarn resolution & fetch lines
   if (/^(?:npm http fetch\s+200|Progress:\s+resolved\s+\d+|Packages:\s+\+\d+)/i.test(trimmed)) return true;
-  // pip / uv downloading / cached wheel lines
   if (/^(?:Downloading|Using cached|Requirement already satisfied:)\s+[a-zA-Z0-9_.-]+/i.test(trimmed)) return true;
   return false;
 }
@@ -169,20 +222,13 @@ function isBuildNoiseLine(line) {
   if (typeof line !== 'string') return false;
   const trimmed = line.trim();
   if (!trimmed || /(?:error|warn|failed|exception|invalid)/i.test(trimmed)) return false;
-  // Vite / Rollup / Webpack dist asset chunk table lines (e.g. "dist/assets/index-a1b2c3.js   14.20 kB │ gzip:  4.50 kB")
   if (/^(?:dist|build|\.next|out)\/[\w./-]+\.(?:js|css|mjs|map|woff2?|svg|png)\s+\d+(?:\.\d+)?\s*(?:kB|MB|B)\b/i.test(trimmed)) return true;
-  // CMake / Make / Ninja object build progress (e.g. "[ 42%] Building CXX object ...")
   if (/^\[\s*\d+%\]\s+Building\s+(?:C|CXX|CUDA|OBJC)\s+object\s+/i.test(trimmed)) return true;
   return false;
 }
 
 /**
  * Positive Test Passes Folding.
- * Strictly matches PASS / ✓ / ok lines and folds runs >= 3,
- * while 100% preserving failures, stack traces, assertion diffs, and errors.
- * @param {string} text
- * @param {object} options
- * @returns {string}
  */
 function foldTestPasses(text, options = {}) {
   if (typeof text !== 'string' || text.length === 0) return text;
@@ -232,8 +278,6 @@ function foldTestPasses(text, options = {}) {
 
 /**
  * Clean Docker multi-layer pull / push noise.
- * @param {string} text
- * @returns {string}
  */
 function cleanDockerOutput(text) {
   if (typeof text !== 'string' || text.length === 0) return text;
@@ -277,8 +321,6 @@ function cleanDockerOutput(text) {
 
 /**
  * Clean repetitive Terraform / OpenTofu state refreshing logs.
- * @param {string} text
- * @returns {string}
  */
 function cleanTerraformOutput(text) {
   if (typeof text !== 'string' || !text.includes('Refreshing state...')) return text;
@@ -319,8 +361,6 @@ function cleanTerraformOutput(text) {
 
 /**
  * Cleans repetitive Kubernetes pod / rollout status lines.
- * @param {string} text
- * @returns {string}
  */
 function cleanKubectlOutput(text) {
   if (typeof text !== 'string' || text.length === 0) return text;
@@ -364,8 +404,6 @@ function cleanKubectlOutput(text) {
 
 /**
  * Cleans repetitive package manager (Cargo / npm / pnpm / pip) download & compilation progress spam.
- * @param {string} text
- * @returns {string}
  */
 function cleanPkgInstallOutput(text) {
   if (typeof text !== 'string' || text.length === 0) return text;
@@ -406,8 +444,6 @@ function cleanPkgInstallOutput(text) {
 
 /**
  * Cleans repetitive bundler / compiler build progress and asset table lines.
- * @param {string} text
- * @returns {string}
  */
 function cleanBuildOutput(text) {
   if (typeof text !== 'string' || text.length === 0) return text;
@@ -447,9 +483,8 @@ function cleanBuildOutput(text) {
 }
 
 /**
- * Folds consecutive identical non-diagnostic lines (e.g. repeated log heartbeats or polling messages)
- * when repeated >= 3 times, into `<line> [xN repeated]`.
- * Strictly exempts stack traces, diffs, merge conflicts, and errors.
+ * Folds consecutive identical or timestamp-identical non-diagnostic lines (when repeated >= 3 times)
+ * into `<line> [xN repeated]`. Strictly exempts stack traces, diffs, merge conflicts, and errors.
  * @param {string} text
  * @returns {string}
  */
@@ -463,12 +498,13 @@ function foldDuplicateLines(text) {
 
     const out = [];
     let prevLine = null;
+    let prevSig = null;
     let count = 0;
     let folded = false;
 
     const flush = () => {
       if (count === 0) return;
-      if (count >= 3 && prevLine && prevLine.trim().length > 4 && !isProtectedDiagnosticLine(prevLine)) {
+      if (count >= 3 && prevLine && prevSig && prevSig.length > 4 && !isProtectedDiagnosticLine(prevLine)) {
         const summary = `${prevLine} [x${count} repeated]`;
         const rawLen = (prevLine.length + newline.length) * count;
         if (summary.length < rawLen) {
@@ -484,11 +520,13 @@ function foldDuplicateLines(text) {
     };
 
     for (const line of lines) {
-      if (prevLine !== null && line === prevLine && line.trim().length > 0) {
+      const sig = normalizeLogSignature(line);
+      if (prevSig !== null && sig.length > 0 && sig === prevSig) {
         count += 1;
       } else {
         flush();
         prevLine = line;
+        prevSig = sig;
         count = 1;
       }
     }
@@ -496,6 +534,117 @@ function foldDuplicateLines(text) {
 
     if (!folded) return text;
     return out.join(newline);
+  } catch (err) {
+    return text;
+  }
+}
+
+/**
+ * Folds long bursts (>= 20 lines) of routine [INFO]/[DEBUG]/[TRACE] log lines while 100% preserving
+ * any ERROR, WARN, FAIL, Exception, or stack trace lines and storing folded logs in CCR.
+ * @param {string} text
+ * @returns {string}
+ */
+function cleanLogBurstOutput(text) {
+  if (typeof text !== 'string' || text.length < 600) return text;
+  try {
+    const isCrlf = text.includes('\r\n');
+    const newline = isCrlf ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    if (lines.length < 20) return text;
+
+    const result = [];
+    let logRun = [];
+    let folded = false;
+
+    const flushRun = () => {
+      if (logRun.length >= 20) {
+        const head = logRun.slice(0, 5);
+        const tail = logRun.slice(-3);
+        const middle = logRun.slice(5, -3);
+        let chunkNotice = '';
+        try {
+          const { storeChunk } = require('./chunk-store');
+          const chunkId = storeChunk(logRun.join(newline), { type: 'routine_logs', count: logRun.length });
+          if (chunkId) chunkNotice = ` [CCR: agy_retrieve_chunk(chunk_id="${chunkId}")]`;
+        } catch (_) {}
+        result.push(...head);
+        result.push(`[Log Stream: ${middle.length} routine INFO/DEBUG lines folded]${chunkNotice}`);
+        result.push(...tail);
+        folded = true;
+      } else {
+        result.push(...logRun);
+      }
+      logRun = [];
+    };
+
+    for (const line of lines) {
+      if (isRoutineLogLine(line)) {
+        logRun.push(line);
+      } else {
+        flushRun();
+        result.push(line);
+      }
+    }
+    flushRun();
+
+    if (!folded) return text;
+    return result.join(newline);
+  } catch (err) {
+    return text;
+  }
+}
+
+/**
+ * Folds giant directory listings (Get-ChildItem / dir / ls -la) exceeding 50 items into head + tail + CCR.
+ * @param {string} text
+ * @returns {string}
+ */
+function cleanDirectoryListingOutput(text) {
+  if (typeof text !== 'string' || text.length < 1500) return text;
+  try {
+    const isCrlf = text.includes('\r\n');
+    const newline = isCrlf ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    if (lines.length < 50) return text;
+
+    const result = [];
+    let dirRun = [];
+    let folded = false;
+
+    const flushRun = () => {
+      if (dirRun.length >= 50) {
+        const head = dirRun.slice(0, 25);
+        const tail = dirRun.slice(-10);
+        const omitted = dirRun.length - 35;
+        let chunkNotice = '';
+        try {
+          const { storeChunk } = require('./chunk-store');
+          const chunkId = storeChunk(dirRun.join(newline), { type: 'dir_listing', count: dirRun.length });
+          if (chunkId) chunkNotice = ` [CCR: agy_retrieve_chunk(chunk_id="${chunkId}")]`;
+        } catch (_) {}
+        result.push(...head);
+        result.push(`[Directory Listing: ${omitted} file entries folded]${chunkNotice}`);
+        result.push(...tail);
+        folded = true;
+      } else {
+        result.push(...dirRun);
+      }
+      dirRun = [];
+    };
+
+    for (const line of lines) {
+      if (isDirectoryListingLine(line)) {
+        dirRun.push(line);
+      } else {
+        flushRun();
+        result.push(line);
+      }
+    }
+    flushRun();
+
+    if (!folded) return text;
+    return result.join(newline);
   } catch (err) {
     return text;
   }
@@ -511,7 +660,12 @@ module.exports = {
   cleanPkgInstallOutput,
   cleanBuildOutput,
   foldDuplicateLines,
+  cleanLogBurstOutput,
+  cleanDirectoryListingOutput,
+  normalizeLogSignature,
   isProtectedDiagnosticLine,
+  isRoutineLogLine,
+  isDirectoryListingLine,
   isPassLine,
   isDockerLayerLine,
   isTfRefreshLine,
