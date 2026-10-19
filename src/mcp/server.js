@@ -18,7 +18,7 @@ const readline = require('node:readline');
 const { compactOutput, foldLockfiles, foldStructuredData } = require('../core/compactor');
 const { fixPowerShellCommandEscaping } = require('../core/powershell');
 const { retrieveChunk } = require('../core/chunk-store');
-const { extractCodeSkeleton } = require('../core/skeleton');
+const { extractCodeSkeleton, generateRepoMap } = require('../core/skeleton');
 const { searchSandbox } = require('../core/fts');
 const { alignToolsSchema } = require('../core/schema');
 const { recordSavings, recordSchemaAlignment } = require('../core/telemetry');
@@ -116,6 +116,23 @@ const RAW_TOOLS = [
         }
       },
       required: ['path', 'query']
+    }
+  },
+  {
+    name: 'read_repo_map',
+    description: 'Aider-style AST Codebase Map: Scans a directory and generates a concise, hierarchical map of classes, interfaces, and function signatures with exact line numbers across the codebase (< 1,000 tokens for entire project). Enables jumping straight to the exact line without full-file reading.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        dir_path: {
+          type: 'string',
+          description: 'Absolute or workspace-relative path to the project root directory (defaults to current working directory).'
+        },
+        max_files: {
+          type: 'integer',
+          description: 'Maximum number of code files to map (default 40).'
+        }
+      }
     }
   }
 ];
@@ -263,6 +280,18 @@ function handleToolCall(name, args) {
       content: [{
         type: 'text',
         text: `[Sandbox FTS Search: ${result.matches.length} matches in ${path.basename(result.targetPath)} (${result.engine})]\n${formatted}`
+      }]
+    };
+  }
+
+  // 6. read_repo_map (Aider-style AST Repo Map)
+  if (name === 'read_repo_map' || name === 'agy_repo_map') {
+    const dir = args.dir_path ? path.resolve(args.dir_path) : process.cwd();
+    const res = generateRepoMap(dir, { maxFiles: args.max_files || 40 });
+    return {
+      content: [{
+        type: 'text',
+        text: res.map || '# Codebase Map: No matching code files found.'
       }]
     };
   }

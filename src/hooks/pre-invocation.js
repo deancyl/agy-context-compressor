@@ -9,7 +9,7 @@ function handlePreInvocation(payload = {}) {
   return {
     injectSteps: [
       {
-        ephemeralMessage: '⚡ [AGY Context Optimization Active]: For files >300 lines, use precise StartLine/EndLine slices (<=300 lines) or read_code_skeleton. High-noise terminal logs are automatically folded.'
+        ephemeralMessage: '⚡ [AGY Context Optimization Active]: For files >300 lines, use precise StartLine/EndLine slices (<=300 lines) or call read_repo_map / read_code_skeleton. High-noise terminal logs are automatically folded.'
       }
     ]
   };

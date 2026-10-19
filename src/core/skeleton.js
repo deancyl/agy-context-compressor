@@ -7,6 +7,7 @@
  * then accurately pinpoint StartLine/EndLine for view_file.
  */
 
+const fs = require('node:fs');
 const path = require('node:path');
 
 /**
@@ -243,9 +244,140 @@ function extractCodeSkeleton(content, filePath = '') {
   }
 }
 
+/**
+ * Extracts a ultra-concise bulleted symbol outline from code.
+ * @param {string} content
+ * @param {string} filePath
+ * @returns {string[]}
+ */
+function extractSymbolOutline(content, filePath = '') {
+  if (typeof content !== 'string' || content.length === 0) return [];
+  const skeleton = extractCodeSkeleton(content, filePath);
+  const lines = skeleton.split(/\r?\n/);
+  const symbols = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const lineMatch = trimmed.match(/^(?:\/{2}|#)\s*\[Line\s+(\d+)\]/i);
+    if (lineMatch) {
+      const lineNum = lineMatch[1];
+      const nextLine = (lines[i + 1] || '').trim();
+      if (nextLine) {
+        const cleaned = nextLine
+          .replace(/\{[\s\S]*$/, '')
+          .replace(/:\s*$/, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (cleaned && !cleaned.startsWith('//') && !cleaned.startsWith('#')) {
+          const isClass = /\bclass\b/.test(cleaned);
+          const indent = isClass ? '  - ' : '    - ';
+          symbols.push(`${indent}[Line ${lineNum}] ${cleaned}`);
+        }
+      }
+    }
+  }
+
+  return symbols;
+}
+
+const DEFAULT_EXCLUDE_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'coverage', '.gemini',
+  '.next', '.cache', '.opencode', '.turbo', '.vscode', '.idea'
+]);
+
+const CODE_EXTENSIONS = new Set([
+  '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.cs'
+]);
+
+/**
+ * Scans a directory and generates an Aider-style hierarchical Repo Map (AST outline).
+ * @param {string} rootDir - Root directory to map
+ * @param {object} [options]
+ * @param {number} [options.maxFiles=50]
+ * @param {number} [options.maxChars=15000]
+ * @param {string[]} [options.excludeDirs]
+ * @returns {{ map: string, fileCount: number, symbolCount: number }}
+ */
+function generateRepoMap(rootDir, options = {}) {
+  if (!fs.existsSync(rootDir)) {
+    return { map: '', fileCount: 0, symbolCount: 0 };
+  }
+
+  const maxFiles = options.maxFiles || 50;
+  const maxChars = options.maxChars || 15000;
+  const userExcludes = new Set(options.excludeDirs || []);
+  
+  const filesToScan = [];
+
+  function walk(currentDir) {
+    if (filesToScan.length >= maxFiles) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (filesToScan.length >= maxFiles) break;
+      const name = entry.name;
+      if (DEFAULT_EXCLUDE_DIRS.has(name) || userExcludes.has(name)) continue;
+      if (name.startsWith('.')) continue;
+
+      const fullPath = path.join(currentDir, name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        const ext = path.extname(name).toLowerCase();
+        if (CODE_EXTENSIONS.has(ext)) {
+          filesToScan.push(fullPath);
+        }
+      }
+    }
+  }
+
+  walk(rootDir);
+
+  let output = `# Codebase Repo Map (AST Outline)\n> Generated for: ${path.resolve(rootDir).replace(/\\/g, '/')}\n\n`;
+  let symbolCount = 0;
+  let fileCount = 0;
+
+  for (const filePath of filesToScan) {
+    if (output.length >= maxChars) {
+      output += `\n... [Repo Map truncated at ${fileCount} files to protect token budget]\n`;
+      break;
+    }
+
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const symbols = extractSymbolOutline(content, filePath);
+      const relPath = path.relative(rootDir, filePath).replace(/\\/g, '/');
+
+      if (symbols.length > 0) {
+        output += `## ${relPath}\n`;
+        output += symbols.join('\n') + '\n\n';
+        symbolCount += symbols.length;
+        fileCount++;
+      } else if (content.length > 0 && content.length < 5000) {
+        output += `## ${relPath} (no class/function symbols)\n\n`;
+        fileCount++;
+      }
+    } catch (_) {}
+  }
+
+  return {
+    map: output.trim(),
+    fileCount,
+    symbolCount
+  };
+}
+
 module.exports = {
   extractCodeSkeleton,
   extractPythonSkeleton,
   extractJavaScriptSkeleton,
-  extractGoSkeleton
+  extractGoSkeleton,
+  extractSymbolOutline,
+  generateRepoMap
 };

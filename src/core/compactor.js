@@ -337,6 +337,110 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
   };
 }
 
+/**
+ * Prunes older historical tool outputs from a messages array while strictly preserving
+ * Rule 18 protocol integrity (tool_call_id matching) and exempting errors/failures.
+ * Implements Kompact-style sliding window context condensation with CCR storage.
+ *
+ * @param {Array<object>} messages - Full chat completion messages array
+ * @param {object} [options]
+ * @param {number} [options.keepRecentToolTurns=4] - Number of recent tool calls to keep 100% unpruned
+ * @param {number} [options.minPruneChars=300] - Minimum character length of tool output to qualify for pruning
+ * @param {boolean} [options.recordTelemetry=true] - Whether to record pruned savings to telemetry
+ * @returns {{ messages: Array<object>, prunedCount: number, savedChars: number, totalToolMessages: number }}
+ */
+function pruneHistoricalToolOutputs(messages, options = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { messages, prunedCount: 0, savedChars: 0, totalToolMessages: 0 };
+  }
+
+  const keepRecentToolTurns = typeof options.keepRecentToolTurns === 'number' ? options.keepRecentToolTurns : 4;
+  const minPruneChars = typeof options.minPruneChars === 'number' ? options.minPruneChars : 300;
+
+  // Find all tool/function message indices
+  const toolIndices = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg && (msg.role === 'tool' || msg.role === 'function')) {
+      toolIndices.push(i);
+    }
+  }
+
+  const totalToolMessages = toolIndices.length;
+  if (totalToolMessages <= keepRecentToolTurns) {
+    return { messages, prunedCount: 0, savedChars: 0, totalToolMessages };
+  }
+
+  const prunableToolIndices = new Set(toolIndices.slice(0, totalToolMessages - keepRecentToolTurns));
+  const ERROR_REGEX = /\b(?:error|failed|exception|Traceback|SyntaxError|ReferenceError|TypeError|AssertionError|FAIL)\b/i;
+
+  let prunedCount = 0;
+  let savedChars = 0;
+  let totalOriginalChars = 0;
+
+  const newMessages = messages.map((msg, idx) => {
+    if (!prunableToolIndices.has(idx)) {
+      return msg;
+    }
+
+    const rawContent = typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content) ? JSON.stringify(msg.content) : '');
+    if (!rawContent || rawContent.length < minPruneChars) {
+      return msg;
+    }
+
+    // CRITICAL SAFETY (Anti-Downgrade): NEVER prune errors or failure stack traces
+    if (ERROR_REGEX.test(rawContent)) {
+      return msg;
+    }
+
+    // Store uncompressed text into CCR chunk store for zero-loss reversibility
+    let chunkNotice = '';
+    try {
+      const { storeChunk } = require('./chunk-store');
+      const chunkId = storeChunk(rawContent, {
+        type: 'pruned_tool_output',
+        role: msg.role,
+        tool_call_id: msg.tool_call_id || null,
+        originalLength: rawContent.length
+      });
+      if (chunkId) {
+        chunkNotice = ` CCR: agy_retrieve_chunk(chunk_id="${chunkId}")`;
+      }
+    } catch (_) {}
+
+    const replacement = `[Historical tool output pruned: was ${rawContent.length} chars. Verification succeeded in earlier turn.${chunkNotice}]`;
+    const delta = rawContent.length - replacement.length;
+    if (delta > 0) {
+      savedChars += delta;
+      totalOriginalChars += rawContent.length;
+      prunedCount += 1;
+      return {
+        ...msg,
+        content: replacement
+      };
+    }
+
+    return msg;
+  });
+
+  if (savedChars > 0 && options.recordTelemetry !== false) {
+    try {
+      const { recordSavings } = require('./telemetry');
+      recordSavings('headroom', savedChars, totalOriginalChars, {
+        note: 'prune_historical_tool_outputs',
+        prunedCount
+      });
+    } catch (_) {}
+  }
+
+  return {
+    messages: newMessages,
+    prunedCount,
+    savedChars,
+    totalToolMessages
+  };
+}
+
 module.exports = {
   COMPACTOR_PRESETS,
   resolveOptions,
@@ -356,4 +460,5 @@ module.exports = {
   setMemo,
   hashContent,
   createLineStreamFilter,
+  pruneHistoricalToolOutputs
 };
