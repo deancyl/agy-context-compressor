@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 /**
- * Model Context Protocol (MCP) Server for AGY (2.0)
+ * Model Context Protocol (MCP) Server for AGY (2.1)
  * Ultra-low overhead, 100% native Node.js zero dependencies.
- * 
+ *
+ * Connection & Stability Guarantees:
+ * - Guards stdout so only valid JSON-RPC frames are ever emitted (console.log redirected to stderr).
+ * - Implements `ping`, `resources/list`, `prompts/list`, and notifications so AGY MCP health checks never fail.
+ * - Enforces command execution timeouts and UTF-8 Chinese encoding on Windows PowerShell.
+ *
  * Tools:
  * 1. compact_view_file: Lossless context compression for text/code (lockfile/JSON folding + lossless source whitespace cleanup).
  * 2. compact_run_command: Denoised terminal command runner (ANSI strip, progress collapse, test/devops/pkg folding).
@@ -11,6 +16,12 @@
  * 5. compact_search_sandbox: Context Mode FTS5 SQLite BM25 sandboxed search (supports single file or directory with merged context windows).
  * 6. read_repo_map: Aider-style dependency-centrality ranked codebase map.
  */
+
+const rawStdoutWrite = process.stdout.write.bind(process.stdout);
+// Redirect any accidental console.log to stderr so MCP JSON-RPC stdout stream is never corrupted
+console.log = (...args) => process.stderr.write(args.join(' ') + '\n');
+console.info = console.log;
+console.debug = console.log;
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -147,14 +158,14 @@ const TOOLS = alignToolsSchema(RAW_TOOLS);
 
 function sendJsonRpc(response) {
   const payload = JSON.stringify(response);
-  process.stdout.write(payload + '\n');
+  rawStdoutWrite(payload + '\n');
 }
 
 function handleToolCall(name, args) {
   // 1. compact_view_file
   if (name === 'compact_view_file') {
     const filePath = args.path;
-    if (!fs.existsSync(filePath)) {
+    if (!filePath || !fs.existsSync(filePath)) {
       return {
         content: [{ type: 'text', text: `Error: File not found: ${filePath}` }],
         isError: true
@@ -169,6 +180,13 @@ function handleToolCall(name, args) {
     content = foldStructuredData(content);
     content = compactSourceCode(content);
 
+    if (args.maxLines && typeof args.maxLines === 'number') {
+      const lines = content.split(/\r?\n/);
+      if (lines.length > args.maxLines) {
+        content = lines.slice(0, args.maxLines).join('\n') + `\n... [truncated to ${args.maxLines} lines]`;
+      }
+    }
+
     const delta = origLen - content.length;
     if (delta > 0) {
       recordSavings('headroom', delta, origLen, {
@@ -176,13 +194,6 @@ function handleToolCall(name, args) {
         originalText: raw,
         compressedText: content
       });
-    }
-
-    if (args.maxLines && typeof args.maxLines === 'number') {
-      const lines = content.split(/\r?\n/);
-      if (lines.length > args.maxLines) {
-        content = lines.slice(0, args.maxLines).join('\n') + `\n... [truncated to ${args.maxLines} lines]`;
-      }
     }
 
     return {
@@ -195,15 +206,27 @@ function handleToolCall(name, args) {
     const rawCmd = args.command || '';
     const cwd = args.cwd || process.cwd();
     const safeCmd = fixPowerShellCommandEscaping(rawCmd);
+    const isWin = process.platform === 'win32';
+    const shell = isWin ? 'powershell.exe' : '/bin/sh';
+    const finalCmd = isWin
+      ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; ${safeCmd}`
+      : safeCmd;
 
     try {
-      const isWin = process.platform === 'win32';
-      const shell = isWin ? 'powershell.exe' : '/bin/sh';
-      const rawOutput = execSync(safeCmd, {
+      const rawOutput = execSync(finalCmd, {
         cwd,
         shell,
         encoding: 'utf8',
+        timeout: 60000,
         maxBuffer: 10 * 1024 * 1024,
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONUTF8: '1',
+          GIT_PAGER: 'cat',
+          PAGER: 'cat',
+          CI: process.env.CI || 'true'
+        },
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
@@ -245,7 +268,7 @@ function handleToolCall(name, args) {
   // 4. read_code_skeleton (Signature Mode)
   if (name === 'read_code_skeleton' || name === 'agy_read_skeleton') {
     const filePath = args.path;
-    if (!fs.existsSync(filePath)) {
+    if (!filePath || !fs.existsSync(filePath)) {
       return {
         content: [{ type: 'text', text: `Error: File not found: ${filePath}` }],
         isError: true
@@ -304,10 +327,23 @@ function handleToolCall(name, args) {
       formatted = `No matches found for query "${result.query}" in ${result.totalLines} lines.`;
     }
 
+    const outputText = `[Sandbox FTS Search: ${result.matches.length} matches in ${path.basename(result.targetPath)} (${result.engine})]\n${formatted}`;
+    const estimatedRawChars = (result.totalLines || 0) * 42;
+    const savedChars = Math.max(0, estimatedRawChars - outputText.length);
+    if (savedChars > 100) {
+      try {
+        recordSavings('aider', savedChars, estimatedRawChars, {
+          type: 'fts_search',
+          query: result.query,
+          matches: result.matches.length
+        });
+      } catch (_) {}
+    }
+
     return {
       content: [{
         type: 'text',
-        text: `[Sandbox FTS Search: ${result.matches.length} matches in ${path.basename(result.targetPath)} (${result.engine})]\n${formatted}`
+        text: outputText
       }]
     };
   }
@@ -350,9 +386,16 @@ rl.on('line', line => {
   const trimmed = line.trim();
   if (!trimmed) return;
 
+  let reqId = null;
   try {
     const req = JSON.parse(trimmed);
     const { id, method, params } = req;
+    reqId = id !== undefined ? id : null;
+
+    // Notifications (no id) require no response
+    if (id === undefined || (typeof method === 'string' && method.startsWith('notifications/'))) {
+      return;
+    }
 
     if (method === 'initialize') {
       sendJsonRpc({
@@ -365,14 +408,37 @@ rl.on('line', line => {
           },
           serverInfo: {
             name: 'agy-context-compressor',
-            version: '2.0.0'
+            version: '2.1.0'
           }
         }
       });
       return;
     }
 
-    if (method === 'notifications/initialized') {
+    if (method === 'ping') {
+      sendJsonRpc({
+        jsonrpc: '2.0',
+        id,
+        result: {}
+      });
+      return;
+    }
+
+    if (method === 'resources/list') {
+      sendJsonRpc({
+        jsonrpc: '2.0',
+        id,
+        result: { resources: [] }
+      });
+      return;
+    }
+
+    if (method === 'prompts/list') {
+      sendJsonRpc({
+        jsonrpc: '2.0',
+        id,
+        result: { prompts: [] }
+      });
       return;
     }
 
@@ -392,7 +458,7 @@ rl.on('line', line => {
     }
 
     if (method === 'tools/call') {
-      const result = handleToolCall(params.name, params.arguments || {});
+      const result = handleToolCall(params?.name, params?.arguments || {});
       sendJsonRpc({
         jsonrpc: '2.0',
         id,
@@ -401,20 +467,18 @@ rl.on('line', line => {
       return;
     }
 
-    if (id !== undefined) {
-      sendJsonRpc({
-        jsonrpc: '2.0',
-        id,
-        error: {
-          code: -32601,
-          message: `Method not found: ${method}`
-        }
-      });
-    }
+    sendJsonRpc({
+      jsonrpc: '2.0',
+      id,
+      error: {
+        code: -32601,
+        message: `Method not found: ${method}`
+      }
+    });
   } catch (err) {
     sendJsonRpc({
       jsonrpc: '2.0',
-      id: null,
+      id: reqId,
       error: {
         code: -32700,
         message: 'Parse error'

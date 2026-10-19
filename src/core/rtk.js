@@ -1,10 +1,11 @@
 /**
- * Card 1: RTK, Squeez & Lean-CTX Terminal Denoising Engine (2.0)
+ * Card 1: RTK, Squeez & ContextZip Terminal Denoising Engine (2.1)
  * 100% native Node.js zero dependencies.
  *
  * Denoises terminal output, ANSI sequences, progress bars, test pass logs,
  * Docker layer pulls, Terraform state refreshes, Kubernetes rollout status,
- * and package manager (Cargo / npm / pnpm / pip) download/compile spam.
+ * package manager (Cargo / npm / pnpm / pip) download/compile spam,
+ * bundler/compiler build progress lines, and consecutive duplicate log lines.
  */
 
 // Comprehensive ANSI Escape Code regex
@@ -42,6 +43,28 @@ const RE_GENERIC_PASS = /^[ \t]*\[\s*(?:PASS|OK)\s*\]\s+/i;
 const RE_GTEST_PASS = /^\[\s*OK\s*\]\s+/;
 const RE_CMAKE_PASS = /^\s*\d+\/\d+\s+Test\s+#\d+:\s+.+\s+\.\.\.\s+Passed\b/i;
 const RE_CHECK_START = /^[ \t]*(?:✓|✔|PASS|ok)\b/;
+
+/**
+ * Checks if a line contains any error, stack trace, diff, or merge conflict marker.
+ * Used as an absolute safety barrier across all RTK folding rules.
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isProtectedDiagnosticLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (RE_FAIL_ICONS.test(line)) return true;
+  if (RE_NOT_OK.test(trimmed)) return true;
+  if (RE_ASSERTION.test(line) && !RE_CHECK_START.test(trimmed)) return true;
+  if (RE_RUNTIME_EXCEPTIONS.test(line)) return true;
+  if (RE_TRACEBACK_START.test(trimmed)) return true;
+  if (RE_AT_STACK.test(line) || RE_PY_STACK.test(line) || RE_C_ERROR.test(line) || RE_RUST_ERROR.test(line)) return true;
+  if (RE_EXPECTED.test(trimmed)) return true;
+  if (RE_CONFLICT_MARKERS.test(line)) return true;
+  if (RE_DIFF_HEADER.test(trimmed)) return true;
+  return false;
+}
 
 /**
  * Strip ANSI escape sequences from text.
@@ -88,18 +111,8 @@ function isPassLine(line) {
   const trimmed = line.trim();
   if (!trimmed) return false;
 
-  // Absolute safety checks (never fold failures or stack traces)
-  if (RE_FAIL_ICONS.test(line)) return false;
-  if (RE_NOT_OK.test(trimmed)) return false;
-  if (RE_ASSERTION.test(line) && !RE_CHECK_START.test(trimmed)) return false;
-  if (RE_RUNTIME_EXCEPTIONS.test(line)) return false;
-  if (RE_TRACEBACK_START.test(trimmed)) return false;
-  if (RE_AT_STACK.test(line) || RE_PY_STACK.test(line) || RE_C_ERROR.test(line) || RE_RUST_ERROR.test(line)) return false;
-  if (RE_EXPECTED.test(trimmed)) return false;
-  if (RE_CONFLICT_MARKERS.test(line)) return false;
-  if (RE_DIFF_HEADER.test(trimmed)) return false;
+  if (isProtectedDiagnosticLine(line)) return false;
 
-  // Positive matchers
   if (RE_CHECKMARK_PASS.test(trimmed)) return true;
   if (RE_TAP_PASS.test(trimmed)) return true;
   if (RE_JEST_PASS.test(trimmed)) return true;
@@ -148,13 +161,24 @@ function isPkgInstallNoiseLine(line) {
   // npm / pnpm / yarn resolution & fetch lines
   if (/^(?:npm http fetch\s+200|Progress:\s+resolved\s+\d+|Packages:\s+\+\d+)/i.test(trimmed)) return true;
   // pip / uv downloading / cached wheel lines
-  if (/^(?:Downloading|Using cached)\s+[a-zA-Z0-9_.-]+-\d+.*\.(?:whl|tar\.gz)/i.test(trimmed)) return true;
+  if (/^(?:Downloading|Using cached|Requirement already satisfied:)\s+[a-zA-Z0-9_.-]+/i.test(trimmed)) return true;
+  return false;
+}
+
+function isBuildNoiseLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed || /(?:error|warn|failed|exception|invalid)/i.test(trimmed)) return false;
+  // Vite / Rollup / Webpack dist asset chunk table lines (e.g. "dist/assets/index-a1b2c3.js   14.20 kB │ gzip:  4.50 kB")
+  if (/^(?:dist|build|\.next|out)\/[\w./-]+\.(?:js|css|mjs|map|woff2?|svg|png)\s+\d+(?:\.\d+)?\s*(?:kB|MB|B)\b/i.test(trimmed)) return true;
+  // CMake / Make / Ninja object build progress (e.g. "[ 42%] Building CXX object ...")
+  if (/^\[\s*\d+%\]\s+Building\s+(?:C|CXX|CUDA|OBJC)\s+object\s+/i.test(trimmed)) return true;
   return false;
 }
 
 /**
  * Positive Test Passes Folding.
- * Inverts matching: strictly matches PASS / ✓ / ok lines and folds runs >= 3,
+ * Strictly matches PASS / ✓ / ok lines and folds runs >= 3,
  * while 100% preserving failures, stack traces, assertion diffs, and errors.
  * @param {string} text
  * @param {object} options
@@ -181,7 +205,6 @@ function foldTestPasses(text, options = {}) {
         } catch (_) {}
         const foldedWithCcr = `[Test suite: ${passingRun.length} passed tests folded (✓ / PASS / ok)]${chunkNotice}`;
         const foldedShort = `[Test suite: ${passingRun.length} passed tests folded (✓ / PASS / ok)]`;
-        // Squeez net_win guard: only attach CCR tag if it doesn't exceed rawBlock length
         result.push(foldedWithCcr.length < rawBlock.length ? foldedWithCcr : foldedShort);
         folded = true;
       } else {
@@ -381,6 +404,103 @@ function cleanPkgInstallOutput(text) {
   }
 }
 
+/**
+ * Cleans repetitive bundler / compiler build progress and asset table lines.
+ * @param {string} text
+ * @returns {string}
+ */
+function cleanBuildOutput(text) {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  try {
+    const isCrlf = text.includes('\r\n');
+    const newline = isCrlf ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    const result = [];
+    let buildRun = [];
+    let folded = false;
+
+    const flushRun = () => {
+      if (buildRun.length >= 5) {
+        result.push(`[Build Output: ${buildRun.length} routine build/asset lines folded]`);
+        folded = true;
+      } else {
+        result.push(...buildRun);
+      }
+      buildRun = [];
+    };
+
+    for (const line of lines) {
+      if (isBuildNoiseLine(line)) {
+        buildRun.push(line);
+      } else {
+        flushRun();
+        result.push(line);
+      }
+    }
+    flushRun();
+
+    if (!folded) return text;
+    return result.join(newline);
+  } catch (err) {
+    return text;
+  }
+}
+
+/**
+ * Folds consecutive identical non-diagnostic lines (e.g. repeated log heartbeats or polling messages)
+ * when repeated >= 3 times, into `<line> [xN repeated]`.
+ * Strictly exempts stack traces, diffs, merge conflicts, and errors.
+ * @param {string} text
+ * @returns {string}
+ */
+function foldDuplicateLines(text) {
+  if (typeof text !== 'string' || text.length < 80) return text;
+  try {
+    const isCrlf = text.includes('\r\n');
+    const newline = isCrlf ? '\r\n' : '\n';
+    const lines = text.split(/\r?\n/);
+    if (lines.length < 3) return text;
+
+    const out = [];
+    let prevLine = null;
+    let count = 0;
+    let folded = false;
+
+    const flush = () => {
+      if (count === 0) return;
+      if (count >= 3 && prevLine && prevLine.trim().length > 4 && !isProtectedDiagnosticLine(prevLine)) {
+        const summary = `${prevLine} [x${count} repeated]`;
+        const rawLen = (prevLine.length + newline.length) * count;
+        if (summary.length < rawLen) {
+          out.push(summary);
+          folded = true;
+        } else {
+          for (let k = 0; k < count; k++) out.push(prevLine);
+        }
+      } else {
+        for (let k = 0; k < count; k++) out.push(prevLine);
+      }
+      count = 0;
+    };
+
+    for (const line of lines) {
+      if (prevLine !== null && line === prevLine && line.trim().length > 0) {
+        count += 1;
+      } else {
+        flush();
+        prevLine = line;
+        count = 1;
+      }
+    }
+    flush();
+
+    if (!folded) return text;
+    return out.join(newline);
+  } catch (err) {
+    return text;
+  }
+}
+
 module.exports = {
   stripAnsi,
   cleanProgressBars,
@@ -389,9 +509,13 @@ module.exports = {
   cleanTerraformOutput,
   cleanKubectlOutput,
   cleanPkgInstallOutput,
+  cleanBuildOutput,
+  foldDuplicateLines,
+  isProtectedDiagnosticLine,
   isPassLine,
   isDockerLayerLine,
   isTfRefreshLine,
   isKubeStatusLine,
-  isPkgInstallNoiseLine
+  isPkgInstallNoiseLine,
+  isBuildNoiseLine
 };

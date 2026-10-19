@@ -1,16 +1,22 @@
 /**
- * Unified Context Compactor Pipeline for AGY (2.0)
+ * Unified Context Compactor Pipeline for AGY (2.1)
  * 100% native Node.js zero dependencies.
  *
  * Integrates:
- * 1. RTK + Squeez Terminal Denoising (ANSI, progress bars, test passes, Docker, Terraform, Kubectl, Cargo/npm/pip)
+ * 1. RTK + Squeez + ContextZip Terminal Denoising (ANSI, progress bars, test passes, Docker, Terraform,
+ *    Kubectl, Cargo/npm/pip, build asset tables, and consecutive duplicate log folding)
  * 2. Headroom Lockfile & 2-Tier Structured JSON Folding (TOON lossless matrix + SmartCrusher CCR)
  * 3. Real-time Block-Aware Line Stream Filter (with git diff lockfile folding & conflict exemption)
  * 4. OpenCode-DCP (Dynamic Context Pruning) 3-Stage Historical Tool Output Condenser:
  *    - Stage 1: Exact Duplicate Read/Output Deduplication
  *    - Stage 2: Supersede Writes (invalidates earlier file reads once the file is edited/written)
  *    - Stage 3: Sliding Window + Cooldown-based Resolved Error Archiving with CCR reversibility
+ * 5. Extensible Custom Stage Registry & Persistent Preset Manager
  */
+
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 
 const {
   stripAnsi,
@@ -20,17 +26,21 @@ const {
   cleanTerraformOutput,
   cleanKubectlOutput,
   cleanPkgInstallOutput,
+  cleanBuildOutput,
+  foldDuplicateLines,
   isPassLine,
   isDockerLayerLine,
   isTfRefreshLine,
   isKubeStatusLine,
-  isPkgInstallNoiseLine
+  isPkgInstallNoiseLine,
+  isBuildNoiseLine,
+  isProtectedDiagnosticLine
 } = require('./rtk');
 const { foldLockfiles, foldStructuredData, encodeTOON, decodeTOON, compactSourceCode } = require('./headroom');
 const { alignToolsSchema, slimToolsSchema } = require('./schema');
 const { cleanPowerShellNoise, fixPowerShellCommandEscaping } = require('./powershell');
 const { getMemo, setMemo, hashContent } = require('./cache-zone');
-const { recordSavings, recordBatchSavings, getStats } = require('./telemetry');
+const { recordSavings, recordCacheZoneHit, recordBatchSavings, getStats } = require('./telemetry');
 
 const COMPACTOR_PRESETS = {
   balanced: {
@@ -41,6 +51,8 @@ const COMPACTOR_PRESETS = {
     cleanTerraformOutput: true,
     cleanKubectlOutput: true,
     cleanPkgInstallOutput: true,
+    cleanBuildOutput: true,
+    foldDuplicateLines: true,
     cleanPowerShellNoise: true,
     foldLockfiles: true,
     foldStructuredData: true,
@@ -60,6 +72,8 @@ const COMPACTOR_PRESETS = {
     cleanTerraformOutput: true,
     cleanKubectlOutput: true,
     cleanPkgInstallOutput: true,
+    cleanBuildOutput: true,
+    foldDuplicateLines: true,
     cleanPowerShellNoise: true,
     foldLockfiles: true,
     foldStructuredData: true,
@@ -80,6 +94,8 @@ const COMPACTOR_PRESETS = {
     cleanTerraformOutput: false,
     cleanKubectlOutput: false,
     cleanPkgInstallOutput: false,
+    cleanBuildOutput: false,
+    foldDuplicateLines: false,
     cleanPowerShellNoise: true,
     foldLockfiles: false,
     foldStructuredData: false,
@@ -92,15 +108,99 @@ const COMPACTOR_PRESETS = {
   }
 };
 
+// Extensible custom compression stage registry
+const customStages = new Map();
+
+/**
+ * Registers a custom compression stage in the pipeline.
+ * @param {object} stage - { name: string, module?: string, fn: (text: string, opts: object) => string }
+ */
+function registerCompressionStage(stage) {
+  if (!stage || typeof stage.name !== 'string' || typeof stage.fn !== 'function') {
+    throw new Error('Invalid compression stage: requires { name, fn }');
+  }
+  customStages.set(stage.name, {
+    name: stage.name,
+    module: stage.module || 'rtk',
+    fn: stage.fn
+  });
+}
+
+/**
+ * Unregisters a custom compression stage by name.
+ * @param {string} name
+ */
+function unregisterCompressionStage(name) {
+  return customStages.delete(name);
+}
+
+/**
+ * Lists registered custom compression stages.
+ */
+function getCompressionStages() {
+  return Array.from(customStages.values());
+}
+
+function getConfigFilePath() {
+  if (process.env.AGY_COMPRESSOR_CONFIG_FILE) {
+    return process.env.AGY_COMPRESSOR_CONFIG_FILE;
+  }
+  return path.join(os.homedir(), '.gemini', 'config', 'agy-compressor-config.json');
+}
+
+let cachedActivePreset = null;
+let cachedConfigMtime = 0;
+
+/**
+ * Reads the persisted active preset ('balanced' | 'aggressive' | 'safe').
+ * @returns {string}
+ */
+function getActivePreset() {
+  try {
+    const cfgFile = getConfigFilePath();
+    if (fs.existsSync(cfgFile)) {
+      const mtime = fs.statSync(cfgFile).mtimeMs;
+      if (cachedActivePreset && mtime <= cachedConfigMtime) {
+        return cachedActivePreset;
+      }
+      const parsed = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+      if (parsed && parsed.preset && COMPACTOR_PRESETS[parsed.preset]) {
+        cachedActivePreset = parsed.preset;
+        cachedConfigMtime = mtime;
+        return cachedActivePreset;
+      }
+    }
+  } catch (_) {}
+  return 'balanced';
+}
+
+/**
+ * Persists the active compression preset ('balanced' | 'aggressive' | 'safe').
+ * @param {'balanced'|'aggressive'|'safe'} preset
+ * @returns {{ preset: string, path: string }}
+ */
+function setActivePreset(preset) {
+  const validPreset = COMPACTOR_PRESETS[preset] ? preset : 'balanced';
+  const cfgFile = getConfigFilePath();
+  try {
+    const dir = path.dirname(cfgFile);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(cfgFile, JSON.stringify({ preset: validPreset, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+    cachedActivePreset = validPreset;
+    cachedConfigMtime = Date.now();
+  } catch (_) {}
+  return { preset: validPreset, path: cfgFile };
+}
+
 /**
  * Normalizes options with presets.
  * @param {object} options
  * @returns {object}
  */
 function resolveOptions(options = {}) {
-  const presetName = options.preset || 'balanced';
+  const presetName = options.preset || getActivePreset() || 'balanced';
   const base = COMPACTOR_PRESETS[presetName] || COMPACTOR_PRESETS.balanced;
-  return { ...base, ...options };
+  return { ...base, preset: presetName, ...options };
 }
 
 /**
@@ -119,6 +219,9 @@ function compactOutput(text, userOptions = {}, sessionId = null) {
     cacheKey = `${hashContent(text)}_${opts.preset || 'balanced'}`;
     const cached = getMemo(sessionId, cacheKey);
     if (cached !== null) {
+      if (opts.recordTelemetry !== false) {
+        recordCacheZoneHit(Math.max(0, text.length - cached.length), text.length, { sessionId });
+      }
       return cached;
     }
   }
@@ -133,7 +236,7 @@ function compactOutput(text, userOptions = {}, sessionId = null) {
   }
   const psDelta = Math.max(0, beforePs - result.length);
 
-  // 2. RTK & Squeez: Strip ANSI, Progress Bars & DevOps/Test/Pkg folding
+  // 2. RTK & Squeez: Strip ANSI, Progress Bars, DevOps/Test/Pkg/Build folding, and Duplicate Line folding
   const beforeRtk = result.length;
   if (opts.stripAnsi) {
     result = stripAnsi(result);
@@ -153,10 +256,16 @@ function compactOutput(text, userOptions = {}, sessionId = null) {
   if (opts.cleanPkgInstallOutput !== false) {
     result = cleanPkgInstallOutput(result);
   }
+  if (opts.cleanBuildOutput !== false) {
+    result = cleanBuildOutput(result);
+  }
   if (opts.foldTestPasses) {
     result = foldTestPasses(result, opts);
   }
-  const rtkDelta = Math.max(0, beforeRtk - result.length);
+  if (opts.foldDuplicateLines !== false) {
+    result = foldDuplicateLines(result);
+  }
+  let rtkDelta = Math.max(0, beforeRtk - result.length);
 
   // 3. Headroom: Fold Lockfile diffs & Structured JSON
   const beforeHeadroom = result.length;
@@ -166,7 +275,23 @@ function compactOutput(text, userOptions = {}, sessionId = null) {
   if (opts.foldStructuredData) {
     result = foldStructuredData(result, opts);
   }
-  const headroomDelta = Math.max(0, beforeHeadroom - result.length);
+  let headroomDelta = Math.max(0, beforeHeadroom - result.length);
+
+  // 4. Custom registered plugin stages
+  if (customStages.size > 0) {
+    for (const stage of customStages.values()) {
+      try {
+        const beforeStage = result.length;
+        const next = stage.fn(result, opts);
+        if (typeof next === 'string' && next.length <= beforeStage) {
+          result = next;
+          const stageSaved = beforeStage - next.length;
+          if (stage.module === 'headroom') headroomDelta += stageSaved;
+          else rtkDelta += stageSaved;
+        }
+      } catch (_) {}
+    }
+  }
 
   // Anti-inflation guard: never return compressed output longer than original input
   if (result.length > originalLength) {
@@ -199,7 +324,7 @@ function compactOutput(text, userOptions = {}, sessionId = null) {
 /**
  * Creates a real-time sliding line stream filter.
  * Preserves cross-chunk test passes, docker layers, terraform state runs, kubectl status,
- * package manager installs, and git diff lockfile blocks.
+ * package manager installs, build asset lines, and git diff lockfile blocks.
  * Emits failures and uncompressed lines immediately without lag.
  * Atomically records net savings at stream end without double-counting.
  *
@@ -214,7 +339,7 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
   let rawCharsIn = 0;
   let emittedCharsOut = 0;
 
-  let currentRunType = null; // 'test' | 'docker' | 'tf' | 'kube' | 'pkg' | 'diff_lockfile' | null
+  let currentRunType = null; // 'test' | 'docker' | 'tf' | 'kube' | 'pkg' | 'build' | 'diff_lockfile' | null
   let activeRun = [];
   let currentLockfileName = 'lockfile';
   let headroomSavedChars = 0;
@@ -297,6 +422,16 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
     } else if (currentRunType === 'pkg') {
       if (activeRun.length >= 4 && opts.cleanPkgInstallOutput !== false) {
         const foldedLine = `[Package Manager: ${activeRun.length} dependency download/compile lines folded]${newlineChar}`;
+        emittedCharsOut += foldedLine.length;
+        onEmit(foldedLine);
+      } else {
+        const fullText = activeRun.map(l => l + newlineChar).join('');
+        emittedCharsOut += fullText.length;
+        onEmit(fullText);
+      }
+    } else if (currentRunType === 'build') {
+      if (activeRun.length >= 5 && opts.cleanBuildOutput !== false) {
+        const foldedLine = `[Build Output: ${activeRun.length} routine build/asset lines folded]${newlineChar}`;
         emittedCharsOut += foldedLine.length;
         onEmit(foldedLine);
       } else {
@@ -427,6 +562,15 @@ function createLineStreamFilter({ onEmit, options = {}, metadata = {} }) {
       return;
     }
 
+    if (opts.cleanBuildOutput !== false && isBuildNoiseLine(line)) {
+      if (currentRunType && currentRunType !== 'build') {
+        flushActiveRun();
+      }
+      currentRunType = 'build';
+      activeRun.push(line);
+      return;
+    }
+
     flushActiveRun();
     const toSend = line + newlineChar;
     emittedCharsOut += toSend.length;
@@ -527,12 +671,6 @@ function buildToolCallMap(messages) {
  *
  * @param {Array<object>} messages - Full chat completion messages array
  * @param {object} [options]
- * @param {number} [options.keepRecentToolTurns=4] - Number of recent tool calls to keep 100% unpruned
- * @param {number} [options.minPruneChars=300] - Minimum character length of tool output to qualify for pruning
- * @param {number} [options.errorCooldownTurns=8] - Number of tool turns to protect errors before resolved archiving
- * @param {boolean} [options.deduplicateReads=true] - Prune duplicate older outputs
- * @param {boolean} [options.supersedeWrites=true] - Prune file reads older than a write to the same file
- * @param {boolean} [options.recordTelemetry=true] - Whether to record pruned savings to telemetry
  * @returns {{ messages: Array<object>, prunedCount: number, savedChars: number, totalToolMessages: number }}
  */
 function pruneHistoricalToolOutputs(messages, options = {}) {
@@ -548,7 +686,6 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
 
   const callMap = buildToolCallMap(messages);
 
-  // Find all tool/function message indices
   const toolIndices = [];
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -568,7 +705,6 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
       : []
   );
 
-  // Track latest write index per file and latest read index per (file, slice)
   const latestWriteIdxByFile = new Map();
   const latestReadIdxByKey = new Map();
 
@@ -589,12 +725,10 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
 
   const ERROR_REGEX = /\b(?:error|failed|exception|Traceback|SyntaxError|ReferenceError|TypeError|AssertionError|FAIL)\b/i;
 
-  // Check if the most recent tool output succeeded without error
   const lastToolMsg = messages[toolIndices[toolIndices.length - 1]];
   const lastToolStr = typeof lastToolMsg?.content === 'string' ? lastToolMsg.content : '';
   const recentTurnHealthy = !ERROR_REGEX.test(lastToolStr);
 
-  // Map tool message index -> its ordinal rank (0..totalToolMessages-1)
   const toolRankMap = new Map();
   toolIndices.forEach((mIdx, rank) => toolRankMap.set(mIdx, rank));
 
@@ -650,7 +784,6 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
       return msg;
     }
 
-    // Store uncompressed text into CCR chunk store for zero-loss reversibility
     let chunkNotice = '';
     try {
       const { storeChunk } = require('./chunk-store');
@@ -698,8 +831,131 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
   };
 }
 
+/**
+ * Runs a comprehensive built-in multi-scenario benchmark verifying compression ratio and zero-downgrade safety.
+ * @returns {{ scenarios: Array<object>, totalOriginalChars: number, totalCompressedChars: number, overallRatio: number, allPassed: boolean }}
+ */
+function runCompressionBenchmark() {
+  const { extractCodeSkeleton } = require('./skeleton');
+
+  const scenarios = [];
+
+  // 1. Test Suite with Failure & Stack Trace
+  const testInput = [
+    ...Array.from({ length: 80 }, (_, i) => `\u001b[32m✓\u001b[0m test suite case #${i + 1}: verifies module behavior (${(i % 9) + 1}ms)`),
+    '\u001b[31m✕\u001b[0m test suite case #81: handles edge case',
+    '  AssertionError [ERR_ASSERTION]: Expected 200 to strictly equal 500',
+    '      at Context.<anonymous> (src/api/router.test.js:142:14)'
+  ].join('\n');
+  const testOut = compactOutput(testInput, { recordTelemetry: false });
+  scenarios.push({
+    name: 'Card 1: RTK 大型测试套件去噪 (80 通过 + 1 报错堆栈)',
+    originalChars: testInput.length,
+    compressedChars: testOut.length,
+    ratio: Number(((1 - testOut.length / testInput.length) * 100).toFixed(1)),
+    safetyPassed: testOut.includes('AssertionError') && testOut.includes('router.test.js:142:14') && testOut.includes('80 passed tests folded')
+  });
+
+  // 2. Lockfile Git Diff + Conflict Safety
+  const lockDiffInput = [
+    'diff --git a/package-lock.json b/package-lock.json',
+    'index 1111111..2222222 100644',
+    '--- a/package-lock.json',
+    '+++ b/package-lock.json',
+    '@@ -10,150 +10,150 @@',
+    ...Array.from({ length: 150 }, (_, i) => `+    "pkg-dep-${i}": { "version": "1.2.${i}", "resolved": "https://registry.npmjs.org/pkg-dep-${i}/-/pkg-dep-${i}-1.2.${i}.tgz" },`)
+  ].join('\n');
+  const lockDiffOut = compactOutput(lockDiffInput, { recordTelemetry: false });
+  scenarios.push({
+    name: 'Card 2: Headroom 依赖锁文件 Diff 折叠 (150 行)',
+    originalChars: lockDiffInput.length,
+    compressedChars: lockDiffOut.length,
+    ratio: Number(((1 - lockDiffOut.length / lockDiffInput.length) * 100).toFixed(1)),
+    safetyPassed: lockDiffOut.includes('Lockfile diff folded') && lockDiffOut.includes('CCR Chunk:')
+  });
+
+  // 3. Giant Homogeneous JSON Array (SmartCrusher)
+  const jsonInput = JSON.stringify(
+    Array.from({ length: 100 }, (_, i) => ({
+      id: i + 1,
+      username: `user_${i + 1}`,
+      email: `user_${i + 1}@example.com`,
+      status: 'active',
+      role: 'member'
+    })),
+    null,
+    2
+  );
+  const jsonOut = compactOutput(jsonInput, { recordTelemetry: false });
+  scenarios.push({
+    name: 'Card 2: SmartCrusher 100 项同构 JSON 数组采样',
+    originalChars: jsonInput.length,
+    compressedChars: jsonOut.length,
+    ratio: Number(((1 - jsonOut.length / jsonInput.length) * 100).toFixed(1)),
+    safetyPassed: jsonOut.includes('SmartCrusher:') && jsonOut.includes('user_1') && jsonOut.includes('user_100')
+  });
+
+  // 4. AST Code Skeleton Extraction
+  const codeInput = Array.from({ length: 20 }, (_, i) => [
+    `export async function processOrderStep${i + 1}(orderId, payload = { retry: true }) {`,
+    `  const start = Date.now();`,
+    `  const normalized = JSON.stringify(payload);`,
+    `  for (let k = 0; k < 10; k++) {`,
+    `    console.debug("step", k, orderId, normalized);`,
+    `  }`,
+    `  return { ok: true, elapsed: Date.now() - start };`,
+    `}`
+  ].join('\n')).join('\n\n');
+  const codeOut = extractCodeSkeleton(codeInput, 'service.ts');
+  scenarios.push({
+    name: 'Card 6: Aider 词法级 AST 代码骨架提取 (20 个函数)',
+    originalChars: codeInput.length,
+    compressedChars: codeOut.length,
+    ratio: Number(((1 - codeOut.length / codeInput.length) * 100).toFixed(1)),
+    safetyPassed: codeOut.includes('processOrderStep1') && codeOut.includes('processOrderStep20') && codeOut.includes('[Line 1-8]')
+  });
+
+  // 5. OpenCode-DCP 3-Stage Historical Pruning
+  const histMessages = [
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c1', function: { name: 'view_file', arguments: '{"AbsolutePath":"/src/app.js"}' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: '// app.js v1\n'.repeat(120) },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c2', function: { name: 'replace_file_content', arguments: '{"TargetFile":"/src/app.js"}' } }] },
+    { role: 'tool', tool_call_id: 'c2', content: 'Updated /src/app.js successfully' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c3', function: { name: 'view_file', arguments: '{"AbsolutePath":"/src/app.js"}' } }] },
+    { role: 'tool', tool_call_id: 'c3', content: '// app.js v2\n'.repeat(120) }
+  ];
+  const origHistLen = JSON.stringify(histMessages).length;
+  const prunedRes = pruneHistoricalToolOutputs(histMessages, { keepRecentToolTurns: 6, recordTelemetry: false });
+  const compHistLen = JSON.stringify(prunedRes.messages).length;
+  scenarios.push({
+    name: 'Card 7: OpenCode-DCP 历史重复读/写前旧快照剪枝',
+    originalChars: origHistLen,
+    compressedChars: compHistLen,
+    ratio: Number(((1 - compHistLen / origHistLen) * 100).toFixed(1)),
+    safetyPassed: prunedRes.prunedCount === 1 && prunedRes.messages[5].content.includes('// app.js v2')
+  });
+
+  const totalOriginalChars = scenarios.reduce((acc, s) => acc + s.originalChars, 0);
+  const totalCompressedChars = scenarios.reduce((acc, s) => acc + s.compressedChars, 0);
+  const overallRatio = Number(((1 - totalCompressedChars / totalOriginalChars) * 100).toFixed(1));
+  const allPassed = scenarios.every(s => s.safetyPassed && s.ratio > 30);
+
+  return {
+    scenarios,
+    totalOriginalChars,
+    totalCompressedChars,
+    overallRatio,
+    allPassed
+  };
+}
+
 module.exports = {
   COMPACTOR_PRESETS,
+  getActivePreset,
+  setActivePreset,
+  registerCompressionStage,
+  unregisterCompressionStage,
+  getCompressionStages,
   resolveOptions,
   compactOutput,
   compactSourceCode,
@@ -710,6 +966,8 @@ module.exports = {
   cleanTerraformOutput,
   cleanKubectlOutput,
   cleanPkgInstallOutput,
+  cleanBuildOutput,
+  foldDuplicateLines,
   foldLockfiles,
   foldStructuredData,
   encodeTOON,
@@ -722,5 +980,6 @@ module.exports = {
   setMemo,
   hashContent,
   createLineStreamFilter,
-  pruneHistoricalToolOutputs
+  pruneHistoricalToolOutputs,
+  runCompressionBenchmark
 };

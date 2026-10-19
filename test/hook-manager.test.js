@@ -6,15 +6,20 @@ const os = require('node:os');
 const {
   isHookInstalled,
   verifyHookExecution,
+  verifyMcpExecution,
   installHook,
   uninstallHook,
   restoreHookBackup
 } = require('../src/utils/hook-manager');
+const {
+  runCompressionBenchmark,
+  registerCompressionStage,
+  unregisterCompressionStage
+} = require('../src/core/compactor');
 
-// Sandbox test directory
 const TEST_SANDBOX_DIR = path.join(os.tmpdir(), `agy_test_hooks_${Date.now()}`);
 
-test('verifyHookExecution: self-tests live hook runner process', () => {
+test('verifyHookExecution & verifyMcpExecution: self-tests live hook runner and MCP server stdio handshake', () => {
   const result = verifyHookExecution();
   assert.strictEqual(result.success, true, `Hook verification failed: ${result.reason}`);
   assert.strictEqual(result.output.decision, 'allow');
@@ -25,10 +30,29 @@ test('verifyHookExecution: self-tests live hook runner process', () => {
     assert.ok(actualCmd.includes('curl.exe'));
     assert.ok(actualCmd.includes('C:\\data\\\\'));
   }
+
+  const mcpResult = verifyMcpExecution();
+  assert.strictEqual(mcpResult.success, true, `MCP verification failed: ${mcpResult.reason}`);
+});
+
+test('runCompressionBenchmark & custom stage plugin registry: verifies all 5 core engines and extensibility', () => {
+  const bench = runCompressionBenchmark();
+  assert.strictEqual(bench.allPassed, true);
+  assert.strictEqual(bench.scenarios.length, 5);
+  assert.ok(bench.overallRatio > 60);
+
+  registerCompressionStage({
+    name: 'custom-banner-strip',
+    module: 'rtk',
+    fn: (text) => text.replace(/=== NOISE BANNER ===\n/g, '')
+  });
+  const { compactOutput } = require('../src/core/compactor');
+  const out = compactOutput('=== NOISE BANNER ===\nHello Clean World', { recordTelemetry: false });
+  assert.strictEqual(out, 'Hello Clean World');
+  unregisterCompressionStage('custom-banner-strip');
 });
 
 test('Round-trip verification: install, preserve other hooks, uninstall, and restore', () => {
-  // Use project mode in the sandbox directory
   const originalCwd = process.cwd();
   try {
     fs.mkdirSync(path.join(TEST_SANDBOX_DIR, '.agents'), { recursive: true });
@@ -36,7 +60,6 @@ test('Round-trip verification: install, preserve other hooks, uninstall, and res
 
     const hooksFile = path.join(TEST_SANDBOX_DIR, '.agents', 'hooks.json');
 
-    // 1. Initial state: Pre-populate with another unrelated user hook
     const initialUserHooks = {
       'user-linter': {
         enabled: true,
@@ -47,28 +70,26 @@ test('Round-trip verification: install, preserve other hooks, uninstall, and res
 
     assert.strictEqual(isHookInstalled('project'), false);
 
-    // 2. Test 一键开启 (installHook)
+    // Install
     const installRes = installHook('project');
     assert.strictEqual(installRes.success, true);
     assert.strictEqual(installRes.verified, true);
     assert.strictEqual(isHookInstalled('project'), true);
 
-    // Verify existing user hook was preserved
     const installedContent = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
     assert.ok(installedContent['user-linter'], 'User linter hook must be preserved');
     assert.ok(installedContent['agy-context-compressor'], 'Compressor hook must be added');
 
-    // 3. Test 一键恢复/卸载 (uninstallHook)
+    // Uninstall
     const uninstallRes = uninstallHook('project');
     assert.strictEqual(uninstallRes.success, true);
     assert.strictEqual(isHookInstalled('project'), false);
 
-    // Verify user hook is STILL preserved after uninstall
     const uninstalledContent = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
     assert.ok(uninstalledContent['user-linter'], 'User linter hook must remain intact');
     assert.strictEqual(uninstalledContent['agy-context-compressor'], undefined);
 
-    // 4. Test 一键从备份还原 (restoreHookBackup)
+    // Restore from backup
     const restoreRes = restoreHookBackup('project');
     assert.strictEqual(restoreRes.success, true);
     const restoredContent = JSON.parse(fs.readFileSync(hooksFile, 'utf8'));
@@ -90,13 +111,11 @@ test('Repeated stress test: 5 consecutive install and uninstall cycles without d
     process.chdir(stressDir);
 
     for (let i = 0; i < 5; i++) {
-      // Install
       const ins = installHook('project');
       assert.strictEqual(ins.success, true);
       assert.strictEqual(ins.verified, true);
       assert.strictEqual(isHookInstalled('project'), true);
 
-      // Uninstall
       const unins = uninstallHook('project');
       assert.strictEqual(unins.success, true);
       assert.strictEqual(isHookInstalled('project'), false);

@@ -1,10 +1,11 @@
 /**
- * AGY PreToolUse Hook Implementation
+ * AGY PreToolUse Hook Implementation (2.1)
  * Intercepts run_command, view_file, and grep_search.
  * Features:
  * 1. PowerShell escaping fixes & alias normalization.
- * 2. Process execution wrapper (agy-exec-wrapper) preserving exit codes 100%.
- * 3. Parameter window narrow-down for lockfiles & giant files in view_file.
+ * 2. Process execution wrapper (agy-exec-wrapper) preserving exit codes 100% and UTF-8 Chinese encoding.
+ * 3. Parameter window narrow-down for lockfiles & minified assets in view_file (0% source truncation).
+ * 4. Automatic build/dependency noise exclusion on root grep_search.
  */
 
 const fs = require('node:fs');
@@ -17,7 +18,7 @@ const WRAPPER_PATH = path.resolve(__dirname, '../../bin/agy-exec-wrapper.js');
 const STREAM_FILTER_PATH = path.resolve(__dirname, 'stream-filter.js');
 
 // Broad developer CLI tools that produce terminal noise, ANSI sequences, progress bars, or verbose logs
-const HIGH_NOISE_COMMANDS_REGEX = /(?:^|[;&|\s])(?:git(?:\.exe)?\s+(?:diff|log|status|show|blame|branch)|npm(?:\.cmd)?|npx(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?|bun(?:\.exe)?|deno(?:\.exe)?|pip(?:\.exe)?|poetry(?:\.exe)?|pytest(?:\.exe)?|cargo(?:\.exe)?|go(?:\.exe)?|mvn(?:\.cmd)?|gradle(?:\.bat)?|dotnet(?:\.exe)?|docker(?:\.exe)?|podman(?:\.exe)?|kubectl(?:\.exe)?|terraform(?:\.exe)?|make|cmake|jest(?:\.cmd)?|vitest(?:\.cmd)?|playwright(?:\.cmd)?|dir|ls|Get-ChildItem|gci|tree|find|findstr|grep|rg|cat|type|Get-Content|gc|tsc(?:\.cmd)?|eslint(?:\.cmd)?|prettier(?:\.cmd)?|ruff(?:\.exe)?|curl(?:\.exe)?|Invoke-WebRequest|iwr|wget|node(?:\.exe)?\s+(?:--test\b|-e\b|[\w\.\/\\-]+\.(?:js|mjs|cjs|ts))|python(?:\.exe)?\s+(?:-m\s+(?:pytest|unittest)\b|-c\b|[\w\.\/\\-]+\.py)|bash\s+[\w\.\/\\-]+\.sh)\b/i;
+const HIGH_NOISE_COMMANDS_REGEX = /(?:^|[;&|\s])(?:git(?:\.exe)?\s+(?:diff|log|status|show|blame|branch|fetch|pull|push|clone)|npm(?:\.cmd)?|npx(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?|bun(?:\.exe)?|deno(?:\.exe)?|pip3?(?:\.exe)?|uv(?:\.exe)?|poetry(?:\.exe)?|pytest(?:\.exe)?|cargo(?:\.exe)?|rustc(?:\.exe)?|go(?:\.exe)?|mvn(?:\.cmd)?|gradle(?:\.bat)?|dotnet(?:\.exe)?|msbuild(?:\.exe)?|docker(?:\.exe)?|docker-compose(?:\.exe)?|podman(?:\.exe)?|kubectl(?:\.exe)?|helm(?:\.exe)?|terraform(?:\.exe)?|make|cmake|ninja|jest(?:\.cmd)?|vitest(?:\.cmd)?|mocha(?:\.cmd)?|playwright(?:\.cmd)?|cypress(?:\.cmd)?|vite(?:\.cmd)?|webpack(?:\.cmd)?|esbuild(?:\.cmd)?|rollup(?:\.cmd)?|next(?:\.cmd)?|dir|ls|Get-ChildItem|gci|tree|find|findstr|grep|rg|cat|type|Get-Content|gc|tsc(?:\.cmd)?|ts-node(?:\.cmd)?|tsx(?:\.cmd)?|eslint(?:\.cmd)?|prettier(?:\.cmd)?|ruff(?:\.exe)?|curl(?:\.exe)?|Invoke-WebRequest|iwr|wget|aws(?:\.exe)?|gcloud(?:\.cmd)?|az(?:\.cmd)?|sqlite3(?:\.exe)?|psql(?:\.exe)?|node(?:\.exe)?\s+(?:--test\b|-e\b|[\w\.\/\\-]+\.(?:js|mjs|cjs|ts))|python3?(?:\.exe)?\s+(?:-m\s+(?:pytest|unittest)\b|-c\b|[\w\.\/\\-]+\.py)|(?:bash|sh|zsh)\s+[\w\.\/\\-]+\.sh|pwsh(?:\.exe)?\s+-File)\b/i;
 
 function handlePreToolUse(payload, options = {}) {
   const toolCall = payload && payload.toolCall;
@@ -31,7 +32,7 @@ function handlePreToolUse(payload, options = {}) {
   // 1. Intercept run_command
   if (toolName === 'run_command') {
     const rawCmd = args.CommandLine || args.command || args.cmd || '';
-    if (!rawCmd) {
+    if (!rawCmd || typeof rawCmd !== 'string') {
       return { decision: 'allow' };
     }
 

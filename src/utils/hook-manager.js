@@ -1,6 +1,7 @@
 /**
- * Hook Manager for AGY Context Compressor
- * Provides atomic, self-verifying installation, uninstallation, and backup restoration.
+ * Hook & MCP Manager for AGY Context Compressor (2.1)
+ * Provides atomic, self-verifying installation, uninstallation, and backup restoration
+ * for both Antigravity Hooks (hooks.json) and MCP Server (mcp_config.json).
  * Strict Redline: Must verify that installation actually works and restoration completely reverts!
  */
 
@@ -10,6 +11,7 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const HOOK_RUNNER_PATH = path.resolve(__dirname, '..', 'hooks', 'hook-runner.js');
+const MCP_SERVER_PATH = path.resolve(__dirname, '..', 'mcp', 'server.js');
 
 function getGlobalHooksPath() {
   const home = os.homedir();
@@ -22,6 +24,25 @@ function getProjectHooksPath() {
 
 function getHooksPath(target = 'global') {
   return target === 'global' ? getGlobalHooksPath() : getProjectHooksPath();
+}
+
+function getGlobalMcpConfigPath() {
+  return path.join(os.homedir(), '.gemini', 'config', 'mcp_config.json');
+}
+
+function writeAtomicSync(targetFile, content) {
+  const dir = path.dirname(targetFile);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const tmpFile = `${targetFile}.tmp_${process.pid}_${Date.now()}`;
+  fs.writeFileSync(tmpFile, content, 'utf8');
+  try {
+    fs.renameSync(tmpFile, targetFile);
+  } catch (_) {
+    try { fs.unlinkSync(tmpFile); } catch (__) {}
+    fs.writeFileSync(targetFile, content, 'utf8');
+  }
 }
 
 /**
@@ -44,6 +65,107 @@ function isHookInstalled(target = 'global') {
   } catch (_) {
     return false;
   }
+}
+
+/**
+ * Checks whether the MCP server is registered in global mcp_config.json.
+ * @returns {boolean}
+ */
+function isMcpInstalled() {
+  const mcpFile = getGlobalMcpConfigPath();
+  if (!fs.existsSync(mcpFile)) return false;
+  try {
+    const json = JSON.parse(fs.readFileSync(mcpFile, 'utf8'));
+    return Boolean(json && json.mcpServers && json.mcpServers['agy-compressor']);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Tests live execution of the MCP server via JSON-RPC initialize + ping over stdio.
+ * @returns {{ success: boolean, reason?: string }}
+ */
+function verifyMcpExecution() {
+  if (!fs.existsSync(MCP_SERVER_PATH)) {
+    return { success: false, reason: `MCP server file missing at: ${MCP_SERVER_PATH}` };
+  }
+  const inputLines = [
+    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+    JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping', params: {} })
+  ].join('\n') + '\n';
+
+  try {
+    const res = spawnSync(process.execPath, [MCP_SERVER_PATH], {
+      input: inputLines,
+      encoding: 'utf8',
+      timeout: 3000
+    });
+    if (res.error) {
+      return { success: false, reason: `MCP spawn error: ${res.error.message}` };
+    }
+    const lines = (res.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) {
+      return { success: false, reason: `MCP did not respond to initialize + ping` };
+    }
+    const initResp = JSON.parse(lines[0]);
+    const pingResp = JSON.parse(lines[1]);
+    if (!initResp.result || !initResp.result.serverInfo || !pingResp.result) {
+      return { success: false, reason: `Invalid MCP JSON-RPC response` };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, reason: `MCP verification exception: ${err.message}` };
+  }
+}
+
+/**
+ * Installs or updates the agy-compressor MCP entry in ~/.gemini/config/mcp_config.json.
+ * Preserves all existing MCP servers.
+ */
+function installMcpServer() {
+  const mcpFile = getGlobalMcpConfigPath();
+  const dir = path.dirname(mcpFile);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  let mcpConfig = { mcpServers: {} };
+  if (fs.existsSync(mcpFile)) {
+    try {
+      const raw = fs.readFileSync(mcpFile, 'utf8');
+      mcpConfig = JSON.parse(raw) || { mcpServers: {} };
+      if (!mcpConfig.mcpServers || typeof mcpConfig.mcpServers !== 'object') {
+        mcpConfig.mcpServers = {};
+      }
+    } catch (_) {
+      mcpConfig = { mcpServers: {} };
+    }
+  }
+
+  mcpConfig.mcpServers['agy-compressor'] = {
+    command: 'node',
+    args: [MCP_SERVER_PATH.replace(/\\/g, '/')]
+  };
+
+  writeAtomicSync(mcpFile, JSON.stringify(mcpConfig, null, 2));
+  return { success: true, path: mcpFile };
+}
+
+/**
+ * Removes the agy-compressor MCP entry from ~/.gemini/config/mcp_config.json.
+ */
+function uninstallMcpServer() {
+  const mcpFile = getGlobalMcpConfigPath();
+  if (!fs.existsSync(mcpFile)) return { success: true, path: mcpFile };
+  try {
+    const mcpConfig = JSON.parse(fs.readFileSync(mcpFile, 'utf8'));
+    if (mcpConfig && mcpConfig.mcpServers && mcpConfig.mcpServers['agy-compressor']) {
+      delete mcpConfig.mcpServers['agy-compressor'];
+      writeAtomicSync(mcpFile, JSON.stringify(mcpConfig, null, 2));
+    }
+  } catch (_) {}
+  return { success: true, path: mcpFile };
 }
 
 /**
@@ -184,14 +306,11 @@ function installHook(target = 'global') {
   };
 
   const serialized = JSON.stringify(hooksConfig, null, 2);
-  const tmpFile = `${hooksFile}.tmp_${process.pid}`;
-  fs.writeFileSync(tmpFile, serialized, 'utf8');
-  fs.renameSync(tmpFile, hooksFile);
+  writeAtomicSync(hooksFile, serialized);
 
   // Self-verification step: test live execution
   const testRes = verifyHookExecution();
   if (!testRes.success) {
-    // Rollback immediately if verification fails
     if (hadExisting) {
       fs.writeFileSync(hooksFile, existingContent, 'utf8');
     } else {
@@ -240,10 +359,9 @@ function uninstallHook(target = 'global') {
   const hadOtherHooks = remainingKeys.length > 0;
 
   if (hadOtherHooks) {
-    fs.writeFileSync(hooksFile, JSON.stringify(hooksConfig, null, 2), 'utf8');
+    writeAtomicSync(hooksFile, JSON.stringify(hooksConfig, null, 2));
   } else {
-    // If no other hooks exist, write clean empty object {}
-    fs.writeFileSync(hooksFile, '{\n}\n', 'utf8');
+    writeAtomicSync(hooksFile, '{\n}\n');
   }
 
   // Verification step: verify it is truly gone
@@ -271,9 +389,8 @@ function restoreHookBackup(target = 'global') {
 
   if (fs.existsSync(latestBak)) {
     const bakContent = fs.readFileSync(latestBak, 'utf8');
-    // Verify backup content is valid JSON
     JSON.parse(bakContent);
-    fs.writeFileSync(hooksFile, bakContent, 'utf8');
+    writeAtomicSync(hooksFile, bakContent);
     return { success: true, restoredFrom: latestBak };
   }
 
@@ -286,7 +403,7 @@ function restoreHookBackup(target = 'global') {
     const candidate = path.join(dir, files[0]);
     const bakContent = fs.readFileSync(candidate, 'utf8');
     JSON.parse(bakContent);
-    fs.writeFileSync(hooksFile, bakContent, 'utf8');
+    writeAtomicSync(hooksFile, bakContent);
     return { success: true, restoredFrom: candidate };
   }
 
@@ -295,9 +412,15 @@ function restoreHookBackup(target = 'global') {
 
 module.exports = {
   getHooksFilePath: getHooksPath,
+  getHooksPath,
+  getGlobalMcpConfigPath,
   isHookInstalled,
+  isMcpInstalled,
   verifyHookExecution,
+  verifyMcpExecution,
   installHook,
   uninstallHook,
+  installMcpServer,
+  uninstallMcpServer,
   restoreHookBackup
 };

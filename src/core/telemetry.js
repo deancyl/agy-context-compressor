@@ -1,13 +1,15 @@
 /**
- * Telemetry & Token Savings Tracker for AGY Context Compressor (2.0)
+ * Telemetry & Token Savings Tracker for AGY Context Compressor (2.1)
  * 100% native Node.js zero dependencies.
  * Multi-process real-time safe: tracks character savings, accurate CJK/English token savings,
- * and separates direct plugin compression metrics from upstream Google KV Cache telemetry.
+ * bounded event log rotation, and separates direct plugin compression metrics from upstream Google KV Cache telemetry.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+
+const MAX_EVENT_LOG_BYTES = 512 * 1024; // 512 KB cap for jsonl event log
 
 /**
  * Bilingual CJK / Code token estimator.
@@ -56,6 +58,15 @@ function getEventsFilePath() {
 function appendEventLog(event) {
   try {
     const file = getEventsFilePath();
+    if (fs.existsSync(file)) {
+      const st = fs.statSync(file);
+      if (st.size > MAX_EVENT_LOG_BYTES) {
+        // Keep the newest half of lines on rotation
+        const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+        const kept = lines.slice(Math.floor(lines.length / 2));
+        fs.writeFileSync(file, kept.join('\n') + '\n', 'utf8');
+      }
+    }
     fs.appendFileSync(file, JSON.stringify(event) + '\n', 'utf8');
   } catch (_) {}
 }
@@ -77,9 +88,9 @@ function getInitialStats() {
       rtk: { savedChars: 0, savedTokens: 0, invocations: 0 },
       headroom: { savedChars: 0, savedTokens: 0, invocations: 0 },
       schema: { savedChars: 0, savedTokens: 0, alignedToolsCount: 0 },
-      cacheZone: { savedChars: 0, savedTokens: 0, hits: 0, upstreamKvCacheTokens: 0 },
+      cacheZone: { savedChars: 0, savedTokens: 0, hits: 0, memoHits: 0, upstreamKvCacheTokens: 0 },
       powershell: { savedChars: 0, savedTokens: 0, fixedCommandsCount: 0 },
-      aider: { savedChars: 0, savedTokens: 0, repoMapCount: 0, skeletonsCount: 0, invocations: 0 },
+      aider: { savedChars: 0, savedTokens: 0, repoMapCount: 0, skeletonsCount: 0, ftsSearchCount: 0, invocations: 0 },
       kompact: { savedChars: 0, savedTokens: 0, prunedToolOutputsCount: 0, invocations: 0 }
     },
     recentEvents: [],
@@ -91,7 +102,6 @@ function getInitialStats() {
 /**
  * Loads latest stats from disk, detecting any external updates via file modification time.
  * @param {boolean} [force=false]
- * @param {boolean} [includeLiveTranscript=false] - Whether to read and parse the live session transcript (only for Dashboard UI)
  * @returns {object}
  */
 function loadStats(force = false, includeLiveTranscript = false) {
@@ -105,7 +115,7 @@ function loadStats(force = false, includeLiveTranscript = false) {
 
   if (!force && statsCache && currentMtime > 0 && currentMtime <= lastLoadedMtime) {
     if (includeLiveTranscript && !statsCache.contextMetrics) {
-      // populate below
+      // Proceed to populate below
     } else {
       return statsCache;
     }
@@ -114,10 +124,12 @@ function loadStats(force = false, includeLiveTranscript = false) {
   if (fs.existsSync(file)) {
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      statsCache = { ...getInitialStats(), ...data };
-      if (!statsCache.modules) statsCache.modules = getInitialStats().modules;
-      if (!statsCache.modules.aider) statsCache.modules.aider = { savedChars: 0, savedTokens: 0, repoMapCount: 0, skeletonsCount: 0, invocations: 0 };
-      if (!statsCache.modules.kompact) statsCache.modules.kompact = { savedChars: 0, savedTokens: 0, prunedToolOutputsCount: 0, invocations: 0 };
+      const init = getInitialStats();
+      statsCache = { ...init, ...data };
+      statsCache.modules = { ...init.modules, ...(data.modules || {}) };
+      for (const k of Object.keys(init.modules)) {
+        statsCache.modules[k] = { ...init.modules[k], ...(statsCache.modules[k] || {}) };
+      }
       lastLoadedMtime = currentMtime;
     } catch (e) {
       // Fallback
@@ -140,10 +152,10 @@ function loadStats(force = false, includeLiveTranscript = false) {
       if (live && live.totalContextProcessed > 0) {
         statsCache.contextMetrics = live;
         if (!statsCache.modules.cacheZone) {
-          statsCache.modules.cacheZone = { savedChars: 0, savedTokens: 0, hits: 0, upstreamKvCacheTokens: 0 };
+          statsCache.modules.cacheZone = { savedChars: 0, savedTokens: 0, hits: 0, memoHits: 0, upstreamKvCacheTokens: 0 };
         }
         statsCache.modules.cacheZone.upstreamKvCacheTokens = live.totalCacheReadTokens;
-        statsCache.modules.cacheZone.hits = live.plannerResponsesCount;
+        statsCache.modules.cacheZone.hits = live.plannerResponsesCount + (statsCache.modules.cacheZone.memoHits || 0);
         statsCache.totalContextProcessed = live.totalContextProcessed;
       }
     } catch (_) {}
@@ -153,24 +165,30 @@ function loadStats(force = false, includeLiveTranscript = false) {
 }
 
 /**
- * Synchronously flushes in-memory stats to disk with atomic write.
+ * Synchronously flushes in-memory stats to disk with atomic write + Windows EPERM retry fallback.
  */
 function flushStats() {
   if (!statsCache) return;
   const file = getStatsFilePath();
+  const payload = JSON.stringify(statsCache, null, 2);
   try {
     const dir = path.dirname(file);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     const tmp = `${file}.tmp_${process.pid}_${Date.now()}`;
-    fs.writeFileSync(tmp, JSON.stringify(statsCache, null, 2), 'utf8');
-    fs.renameSync(tmp, file);
+    fs.writeFileSync(tmp, payload, 'utf8');
+    try {
+      fs.renameSync(tmp, file);
+    } catch (renameErr) {
+      try { fs.unlinkSync(tmp); } catch (_) {}
+      fs.writeFileSync(file, payload, 'utf8');
+    }
     try {
       lastLoadedMtime = fs.statSync(file).mtimeMs;
     } catch (_) {}
   } catch (err) {
     try {
-      fs.writeFileSync(file, JSON.stringify(statsCache, null, 2), 'utf8');
+      fs.writeFileSync(file, payload, 'utf8');
       lastLoadedMtime = Date.now();
     } catch (_) {}
   }
@@ -178,7 +196,7 @@ function flushStats() {
 
 /**
  * Records savings for a specific module or overall event in real time.
- * @param {string} moduleName - 'rtk' | 'headroom' | 'schema' | 'powershell' | 'aider' | 'kompact'
+ * @param {string} moduleName - 'rtk' | 'headroom' | 'schema' | 'powershell' | 'aider' | 'kompact' | 'cacheZone'
  * @param {number} deltaChars - Number of characters pruned
  * @param {number} originalChars - Original character count
  * @param {object} [metadata] - Additional context (e.g. command, filename, originalText, compressedText)
@@ -216,9 +234,14 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
   if (moduleName === 'aider') {
     if (cleanMeta.note === 'generate_repo_map') stats.modules.aider.repoMapCount = (stats.modules.aider.repoMapCount || 0) + 1;
     if (cleanMeta.type === 'code_skeleton') stats.modules.aider.skeletonsCount = (stats.modules.aider.skeletonsCount || 0) + 1;
+    if (cleanMeta.type === 'fts_search') stats.modules.aider.ftsSearchCount = (stats.modules.aider.ftsSearchCount || 0) + 1;
   }
   if (moduleName === 'kompact') {
     stats.modules.kompact.prunedToolOutputsCount = (stats.modules.kompact.prunedToolOutputsCount || 0) + (cleanMeta.prunedCount || 1);
+  }
+  if (moduleName === 'cacheZone') {
+    stats.modules.cacheZone.memoHits = (stats.modules.cacheZone.memoHits || 0) + 1;
+    stats.modules.cacheZone.hits = (stats.modules.cacheZone.hits || 0) + 1;
   }
 
   const event = {
@@ -234,6 +257,25 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
   }
   appendEventLog(event);
 
+  stats.updatedAt = new Date().toISOString();
+  flushStats();
+}
+
+/**
+ * Records an in-memory session memoization hit in Cache-Zone.
+ */
+function recordCacheZoneHit(savedChars = 0, originalChars = 0, metadata = {}) {
+  const stats = loadStats(true);
+  if (!stats.modules.cacheZone) {
+    stats.modules.cacheZone = { savedChars: 0, savedTokens: 0, hits: 0, memoHits: 0, upstreamKvCacheTokens: 0 };
+  }
+  stats.modules.cacheZone.memoHits = (stats.modules.cacheZone.memoHits || 0) + 1;
+  stats.modules.cacheZone.hits = (stats.modules.cacheZone.hits || 0) + 1;
+  if (savedChars > 0) {
+    const tokens = estimateTokens(savedChars);
+    stats.modules.cacheZone.savedChars += savedChars;
+    stats.modules.cacheZone.savedTokens += tokens;
+  }
   stats.updatedAt = new Date().toISOString();
   flushStats();
 }
@@ -362,16 +404,17 @@ function resetStats() {
   return statsCache;
 }
 
-function getStats(force = true, includeLiveTranscript = true) {
-  return loadStats(force, includeLiveTranscript);
+function getStats(force = true, includeLive = true) {
+  return loadStats(force, includeLive);
 }
 
 /**
  * Formats a terminal-friendly dashboard.
+ * @param {object|null} [customStats=null]
  * @returns {string}
  */
-function formatDashboard() {
-  const stats = loadStats(true, true);
+function formatDashboard(customStats = null) {
+  const stats = customStats || loadStats(true, true);
   const fmtNum = (n) => (n || 0).toLocaleString();
   const fmtBytes = (bytes) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -392,7 +435,7 @@ function formatDashboard() {
   const rtkTokens = stats.modules.rtk?.savedTokens || 0;
   const headroomTokens = stats.modules.headroom?.savedTokens || 0;
   const schemaTokens = stats.modules.schema?.savedTokens || 0;
-  const cacheZoneTokens = stats.modules.cacheZone?.savedTokens || 0;
+  const cacheZoneTokens = (stats.modules.cacheZone?.savedTokens || 0) + (stats.modules.cacheZone?.upstreamKvCacheTokens || 0);
   const psTokens = stats.modules.powershell?.savedTokens || 0;
   const aiderTokens = stats.modules.aider?.savedTokens || 0;
   const kompactTokens = stats.modules.kompact?.savedTokens || 0;
@@ -426,19 +469,19 @@ function formatDashboard() {
     ] : []),
     `  \x1b[90m• 累计触发压缩拦截: ${fmtNum(stats.totalInvocations)} 次 | 当前会话轮次: ${fmtNum(ctx.plannerResponsesCount || 0)} | 实时更新于: ${new Date(stats.updatedAt).toLocaleTimeString()}\x1b[0m`,
     '',
-    '\x1b[1m── 模块级贡献细分 (Module Contribution) ──────────────────────────────────\x1b[0m',
+    '\x1b[1m── 七大核心引擎贡献细分 (7-Core Engine Contribution) ─────────────────────\x1b[0m',
     `  • \x1b[1mCard 1: RTK 终端与测试去噪\x1b[0m    : ${fmtNum(rtkTokens).padStart(9)} Tokens (${rtkPct.padStart(5)}%) [${bar(rtkPct, 12)}]`,
     `  • \x1b[1mCard 2: Headroom 结构折叠\x1b[0m     : ${fmtNum(headroomTokens).padStart(9)} Tokens (${headroomPct.padStart(5)}%) [${bar(headroomPct, 12)}]`,
     `  • \x1b[1mCard 3: Tools 缓存对齐瘦身\x1b[0m   : ${fmtNum(schemaTokens).padStart(9)} Tokens (${schemaPct.padStart(5)}%) [${bar(schemaPct, 12)}]`,
     `    \x1b[90m(参数字典严格排序对齐: ${stats.modules.schema?.alignedToolsCount || 0} 个工具 | 锁定 Prompt Cache 前缀)\x1b[0m`,
     `  • \x1b[1mCard 4: llmtrim 会话缓存固化\x1b[0m : ${fmtNum(cacheZoneTokens).padStart(9)} Tokens [锁定命中: ${kvRatio}%]`,
-    `    \x1b[90m(会话前缀字节流锁定: 活跃 | 原厂 KV Cache 固化保护: ${stats.modules.cacheZone?.hits || 0} 轮)\x1b[0m`,
+    `    \x1b[90m(会话前缀字节流锁定: 活跃 | 原厂 KV Cache 固化保护: ${stats.modules.cacheZone?.hits || 0} 次)\x1b[0m`,
     `  • \x1b[1mCard 5: PowerShell 报错去噪\x1b[0m   : ${fmtNum(psTokens).padStart(9)} Tokens (${psPct.padStart(5)}%) [${bar(psPct, 12)}]`,
     `    \x1b[90m(已自动拦截修复 Windows 命令语法陷阱: ${stats.modules.powershell?.fixedCommandsCount || 0} 次)\x1b[0m`,
-    `  • \x1b[1mCard 6: Aider AST 符号地图\x1b[0m    : ${fmtNum(aiderTokens).padStart(9)} Tokens (${aiderPct.padStart(5)}%) [${bar(aiderPct, 12)}]`,
-    `    \x1b[90m(Repo Map 符号拓扑索引: ${stats.modules.aider?.repoMapCount || 0} 次 | 代码骨架: ${stats.modules.aider?.skeletonsCount || 0} 次)\x1b[0m`,
-    `  • \x1b[1mCard 7: Kompact 历史工具剪枝\x1b[0m : ${fmtNum(kompactTokens).padStart(9)} Tokens (${kompactPct.padStart(5)}%) [${bar(kompactPct, 12)}]`,
-    `    \x1b[90m(多轮历史旧工具输出掏空: ${stats.modules.kompact?.prunedToolOutputsCount || 0} 条 | 附带 CCR 暂存待查)\x1b[0m`,
+    `  • \x1b[1mCard 6: Aider AST 与沙盒检索\x1b[0m  : ${fmtNum(aiderTokens).padStart(9)} Tokens (${aiderPct.padStart(5)}%) [${bar(aiderPct, 12)}]`,
+    `    \x1b[90m(Repo Map: ${stats.modules.aider?.repoMapCount || 0} 次 | 代码骨架: ${stats.modules.aider?.skeletonsCount || 0} 次 | FTS5 沙盒: ${stats.modules.aider?.ftsSearchCount || 0} 次)\x1b[0m`,
+    `  • \x1b[1mCard 7: OpenCode-DCP 历史剪枝\x1b[0m: ${fmtNum(kompactTokens).padStart(9)} Tokens (${kompactPct.padStart(5)}%) [${bar(kompactPct, 12)}]`,
+    `    \x1b[90m(多轮历史重复读/旧快照/过期输出剪枝: ${stats.modules.kompact?.prunedToolOutputsCount || 0} 条 | CCR 可逆暂存)\x1b[0m`,
     ''
   ];
 
@@ -464,6 +507,7 @@ module.exports = {
   loadStats,
   flushStats,
   recordSavings,
+  recordCacheZoneHit,
   recordBatchSavings,
   recordPowerShellFix,
   recordSchemaAlignment,

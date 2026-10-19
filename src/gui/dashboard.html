@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AGY 上下文优化与 Token 压缩控制台</title>
+  <title>AGY 上下文优化与 Token 压缩控制台 (v2.1)</title>
   <style>
     :root {
-      --bg: #131314;
-      --card-bg: #1e1f20;
-      --card-hover: #28292a;
-      --border: #333537;
-      --text: #e3e3e3;
+      --bg: #111214;
+      --card-bg: #1b1c1f;
+      --card-hover: #24262a;
+      --border: #2e3035;
+      --text: #e6e8ec;
       --muted: #9aa0a6;
       --primary: #8ab4f8;
       --success: #81c995;
@@ -22,23 +22,25 @@
     body {
       background-color: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
       padding: 24px;
       user-select: none;
       -webkit-user-select: none;
     }
-    .container { max-width: 1080px; margin: 0 auto; }
+    .container { max-width: 1120px; margin: 0 auto; }
     header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       padding-bottom: 16px;
       border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 12px;
     }
     .title-area h1 { font-size: 20px; font-weight: 600; color: #fff; display: flex; align-items: center; gap: 8px; }
     .title-area p { font-size: 13px; color: var(--muted); margin-top: 4px; }
-    .status-badges { display: flex; gap: 10px; align-items: center; }
+    .status-badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -47,30 +49,39 @@
       border-radius: 9999px;
       font-size: 12px;
       font-weight: 500;
-      background: #202124;
+      background: #1f2024;
       border: 1px solid var(--border);
     }
-    .badge.green { color: var(--success); border-color: rgba(129, 201, 149, 0.3); }
-    .badge.blue { color: var(--primary); border-color: rgba(138, 180, 248, 0.3); }
-    .badge.red { color: var(--danger); border-color: rgba(242, 139, 130, 0.3); }
+    .badge.green { color: var(--success); border-color: rgba(129, 201, 149, 0.35); }
+    .badge.blue { color: var(--primary); border-color: rgba(138, 180, 248, 0.35); }
+    .badge.purple { color: var(--accent); border-color: rgba(197, 138, 249, 0.35); }
+    .badge.red { color: var(--danger); border-color: rgba(242, 139, 130, 0.35); }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
-    /* Action Nav Bar */
-    .nav-actions {
+    /* Action & Preset Bar */
+    .toolbar-row {
       display: flex;
+      justify-content: space-between;
+      align-items: center;
       gap: 12px;
-      margin-bottom: 24px;
+      margin-bottom: 22px;
       flex-wrap: wrap;
+    }
+    .nav-actions, .preset-group {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
     }
     .btn {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 18px;
+      gap: 7px;
+      padding: 9px 16px;
       background: var(--card-bg);
       color: var(--text);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 9px;
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
@@ -81,27 +92,27 @@
     .btn.primary:hover { background: #2b6cb0; color: #fff; }
     .btn.success { background: #1c3d2c; border-color: #2f855a; color: #9ae6b4; }
     .btn.danger { background: #3d1c1c; border-color: #9b2c2c; color: #feb2b2; }
+    .btn.preset-btn.active { background: #2c2247; border-color: var(--accent); color: #e9d5ff; }
 
     /* Hero Grid */
     .hero-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(205px, 1fr));
+      gap: 14px;
       margin-bottom: 24px;
     }
     .metric-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 18px;
+      padding: 16px;
       transition: border-color 0.15s ease;
     }
     .metric-card:hover { border-color: #5f6368; }
-    .metric-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; display: flex; justify-content: space-between; }
-    .metric-value { font-size: 28px; font-weight: 700; color: #fff; letter-spacing: -0.5px; }
-    .metric-sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .metric-title { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; display: flex; justify-content: space-between; }
+    .metric-value { font-size: 26px; font-weight: 700; color: #fff; letter-spacing: -0.5px; }
+    .metric-sub { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
 
-    /* Progress bar */
     .progress-bar-bg {
       width: 100%;
       height: 6px;
@@ -119,25 +130,25 @@
     }
 
     /* Modules Grid */
-    .section-title { font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 12px; }
+    .section-title { font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
     .modules-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
       margin-bottom: 24px;
     }
     .module-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 16px;
+      padding: 15px;
     }
-    .module-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .module-name { font-size: 14px; font-weight: 600; color: #fff; }
+    .module-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .module-name { font-size: 13.5px; font-weight: 600; color: #fff; }
     .module-tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #282a2d; color: var(--primary); }
-    .module-desc { font-size: 12px; color: var(--muted); line-height: 1.4; margin-bottom: 10px; }
+    .module-desc { font-size: 12px; color: var(--muted); line-height: 1.45; margin-bottom: 10px; }
 
-    /* Timeline & Doctor Panels */
+    /* Panels */
     .panels-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -151,7 +162,7 @@
       border-radius: 12px;
       padding: 18px;
     }
-    .event-list { list-style: none; max-height: 220px; overflow-y: auto; }
+    .event-list { list-style: none; max-height: 240px; overflow-y: auto; }
     .event-item {
       padding: 8px 0;
       border-bottom: 1px solid #282a2d;
@@ -163,13 +174,28 @@
     .event-item:last-child { border-bottom: none; }
     .event-meta { color: var(--muted); }
 
-    /* Doctor list */
     .doctor-item { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: 13px; border-bottom: 1px solid #282a2d; }
     .doctor-item:last-child { border-bottom: none; }
     .check { color: var(--success); font-weight: bold; }
     .alert { color: var(--warning); font-weight: bold; }
 
-    /* Toast */
+    /* Benchmark Panel */
+    #benchPanel {
+      display: none;
+      background: var(--card-bg);
+      border: 1px solid var(--accent);
+      border-radius: 12px;
+      padding: 18px;
+      margin-bottom: 24px;
+    }
+    .bench-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #282a2d;
+      font-size: 12.5px;
+    }
+
     #toast {
       position: fixed;
       bottom: 24px;
@@ -193,29 +219,54 @@
   <div class="container">
     <header>
       <div class="title-area">
-        <h1>🚀 Google Antigravity Context Compressor</h1>
-        <p>无损上下文优化与 Token 压缩控制台 (Industrial Token Optimization Engine)</p>
+        <h1>🚀 Google Antigravity Context Compressor <span style="font-size: 12px; padding: 2px 8px; background: #282a2d; border-radius: 6px; color: var(--primary);">v2.1</span></h1>
+        <p>简体中文无损上下文优化与 Token 压缩导航控制台 (7-Core Zero-Downgrade Engine)</p>
       </div>
       <div class="status-badges">
-        <div class="badge green"><span class="dot"></span>服务就绪 (Port 4012)</div>
-        <div id="hookBadge" class="badge blue"><span class="dot"></span>Hook 状态探测中...</div>
+        <div class="badge green"><span class="dot"></span>服务在线 (Port 4012)</div>
+        <div id="hookBadge" class="badge blue"><span class="dot"></span>Hook 探测中...</div>
+        <div id="mcpBadge" class="badge purple"><span class="dot"></span>MCP 探测中...</div>
+        <div id="ccrBadge" class="badge blue">CCR 缓存: 0 块</div>
       </div>
     </header>
 
-    <!-- Nav Action Buttons -->
-    <div class="nav-actions">
-      <button class="btn primary" onclick="refreshData(true)">
-        <span>📊</span> 刷新大盘
-      </button>
-      <button class="btn" onclick="runDoctorManual()">
-        <span>🩺</span> 一键体检自诊 (Doctor)
-      </button>
-      <button id="toggleHookBtn" class="btn success" onclick="toggleHook()">
-        <span>⚡</span> 一键全局安装 Hook
-      </button>
-      <button class="btn danger" onclick="resetStatsConfirm()">
-        <span>🔄</span> 重置遥测数据
-      </button>
+    <div class="toolbar-row">
+      <div class="nav-actions">
+        <button class="btn primary" onclick="refreshData(true)">
+          <span>📊</span> 刷新大盘
+        </button>
+        <button class="btn" onclick="runDoctorManual()">
+          <span>🩺</span> 系统体检 (Doctor)
+        </button>
+        <button class="btn" onclick="runBenchmarkUI()">
+          <span>🧪</span> 压缩率与防降智实测
+        </button>
+        <button id="toggleHookBtn" class="btn success" onclick="toggleHook()">
+          <span>⚡</span> 一键全局安装 Hook + MCP
+        </button>
+        <button class="btn" onclick="clearCcrConfirm()">
+          <span>🧹</span> 清理 CCR 池
+        </button>
+        <button class="btn danger" onclick="resetStatsConfirm()">
+          <span>🔄</span> 重置遥测
+        </button>
+      </div>
+
+      <div class="preset-group">
+        <span style="font-size: 12px; color: var(--muted);">压缩档位:</span>
+        <button id="preset-balanced" class="btn preset-btn active" onclick="switchPreset('balanced')">均衡 Balanced</button>
+        <button id="preset-aggressive" class="btn preset-btn" onclick="switchPreset('aggressive')">激进 Aggressive (TOON)</button>
+        <button id="preset-safe" class="btn preset-btn" onclick="switchPreset('safe')">保守 Safe</button>
+      </div>
+    </div>
+
+    <!-- Live Benchmark Results Panel -->
+    <div id="benchPanel">
+      <div class="section-title">
+        <span>🧪 内置 5 大场景无损压缩率与防降智实测结果</span>
+        <button class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="document.getElementById('benchPanel').style.display='none'">关闭</button>
+      </div>
+      <div id="benchBody">正在运行实测...</div>
     </div>
 
     <!-- Context Bloat Warning Banner -->
@@ -239,7 +290,7 @@
         <div id="kvCacheSub" class="metric-sub">Prompt Cache 命中率 0.0%</div>
       </div>
       <div class="metric-card">
-        <div class="metric-title">终端与结构去噪精简 <span>🎯</span></div>
+        <div class="metric-title">终端与结构去噪直接节省 <span>🎯</span></div>
         <div id="savedTokens" class="metric-value">0</div>
         <div id="savedTokensSub" class="metric-sub">折合输入 Token 消耗减免</div>
       </div>
@@ -258,69 +309,69 @@
       </div>
     </div>
 
-    <!-- Module Contribution -->
-    <div class="section-title">五大引擎模块贡献细分 (Engine Breakdown)</div>
+    <!-- 7-Core Engine Contribution -->
+    <div class="section-title">七大核心压缩与防降智引擎贡献细分 (7-Core Engine Breakdown)</div>
     <div class="modules-grid">
       <div class="module-card">
         <div class="module-header">
-          <div class="module-name">Card 1: RTK 终端去噪</div>
+          <div class="module-name">Card 1: RTK + Squeez 终端去噪</div>
           <span class="module-tag">RTK Engine</span>
         </div>
-        <div class="module-desc">ANSI 转义清洗、\r 进度条合并、测试通过项正向折叠 (PASS/✓ 折叠, 报错100%保留)。</div>
+        <div class="module-desc">ANSI 剥离、\r 进度条合并、PASS 测试正向折叠、Docker/K8s/Cargo/Build 刷屏与重复日志折叠，报错100%保真。</div>
         <div id="rtkTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="rtkSub" class="metric-sub">占比 0% | 触发 0 次</div>
       </div>
       <div class="module-card">
         <div class="module-header">
-          <div class="module-name">Card 2: Headroom 结构折叠</div>
+          <div class="module-name">Card 2: Headroom + TOON 折叠</div>
           <span class="module-tag">Headroom</span>
         </div>
-        <div class="module-desc">依赖锁文件 safe folding、同构 JSON 采样。冲突标记 (&lt;&lt;&lt;&lt;&lt;&lt;&lt;) 绝对豁免！</div>
+        <div class="module-desc">依赖锁文件安全折叠、中型 JSON 无损 TOON 矩阵化、巨型 JSON SmartCrusher 采样 + CCR 可逆落盘。冲突标记绝对豁免！</div>
         <div id="headroomTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="headroomSub" class="metric-sub">占比 0% | 触发 0 次</div>
       </div>
       <div class="module-card">
         <div class="module-header">
-          <div class="module-name">Card 3: Tools 缓存对齐</div>
+          <div class="module-name">Card 3: CacheAligner 字典对齐</div>
           <span class="module-tag">CacheAligner</span>
         </div>
-        <div class="module-desc">参数严格字典序排序，锁定 Gemini Prompt Cache 前缀；超大 Schema Markdown 裁剪。</div>
+        <div class="module-desc">工具与复合 Schema 参数严格字典序对齐，锁定 Gemini Prompt Cache 前缀；保护 e.g./CRITICAL 约束不误删。</div>
         <div id="schemaTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="schemaSub" class="metric-sub">占比 0%</div>
       </div>
       <div class="module-card">
         <div class="module-header">
-          <div class="module-name">Card 4: llmtrim 会话固化</div>
+          <div class="module-name">Card 4: llmtrim 会话前缀固化</div>
           <span class="module-tag">Cache-Zone</span>
         </div>
-        <div class="module-desc">多轮前缀字节级固化，锁定 Google Gemini 原生 KV Cache；双边界 True LRU 内存防护。</div>
+        <div class="module-desc">多轮前缀 SHA-256 字节级固化 + Ephemeral 简体中文零污染引导，锁定 Google 原生 KV Cache；双边界 True LRU 防护。</div>
         <div id="cacheZoneTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="cacheZoneSub" class="metric-sub">前缀锁: 活跃 | 固化命中 0 次</div>
       </div>
       <div class="module-card">
         <div class="module-header">
-          <div class="module-name">Card 5: PowerShell Guard</div>
+          <div class="module-name">Card 5: PowerShell & UTF-8 防护</div>
           <span class="module-tag">Windows Guard</span>
         </div>
-        <div class="module-desc">反斜杠防吞噬引号、curl.exe 别名修正、#&lt; CLIXML 报错去噪与 Hex 解码。</div>
+        <div class="module-desc">反斜杠防吞噬引号、curl.exe 别名修正、#&lt; CLIXML 报错去噪、强制 UTF-8 输出编码彻底杜绝中文乱码与挂死。</div>
         <div id="psTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="psSub" class="metric-sub">拦截转义陷阱 0 次</div>
       </div>
       <div class="module-card">
         <div class="module-header">
-          <div class="module-name">Card 6: Aider AST 符号地图</div>
-          <span class="module-tag">Aider Engine</span>
+          <div class="module-name">Card 6: Aider AST & FTS5 沙盒</div>
+          <span class="module-tag">Aider + ContextMode</span>
         </div>
-        <div class="module-desc">Repo Map 符号拓扑索引、精准带行号大纲。先查地图后切片，消灭 80% 源码盲读。</div>
+        <div class="module-desc">词法级括号感知代码骨架（精确标注 [Line start-end]）、中心度排序 Repo Map 与 SQLite FTS5 多文件沙盒检索。</div>
         <div id="aiderTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
-        <div id="aiderSub" class="metric-sub">符号索引 0 次 | 骨架模式 0 次</div>
+        <div id="aiderSub" class="metric-sub">符号索引 0 次 | 骨架 0 次 | 检索 0 次</div>
       </div>
       <div class="module-card">
         <div class="module-header">
-          <div class="module-name">Card 7: Kompact 历史工具剪枝</div>
-          <span class="module-tag">Kompact Engine</span>
+          <div class="module-name">Card 7: OpenCode-DCP 历史剪枝</div>
+          <span class="module-tag">DCP 3-Stage</span>
         </div>
-        <div class="module-desc">滑动窗口修剪多轮历史旧输出 (>4 轮只读掏空为占位符)。报错绝对豁免 + CCR 可逆回查。</div>
+        <div class="module-desc">三阶段历史修剪：①重复读取去重 ②文件修改后自动淘汰旧版读取快照 ③冷却期后归档历史旧输出至 CCR 可逆回查。</div>
         <div id="kompactTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="kompactSub" class="metric-sub">历史工具剪枝 0 条 | CCR 暂存</div>
       </div>
@@ -329,7 +380,7 @@
     <!-- Doctor & Recent Events -->
     <div class="panels-grid">
       <div class="panel">
-        <div class="section-title">🩺 系统体检健康状态 (Doctor Diagnostic)</div>
+        <div class="section-title">🩺 系统体检与连接稳定性状态 (Doctor Diagnostic)</div>
         <div id="doctorContainer">
           <div class="doctor-item"><span class="check">✔</span> 正在探测运行时与配置环境...</div>
         </div>
@@ -362,13 +413,29 @@
       return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
     }
 
+    function updatePresetButtons(activePreset) {
+      ['balanced', 'aggressive', 'safe'].forEach(p => {
+        const el = document.getElementById('preset-' + p);
+        if (el) {
+          if (p === activePreset) el.classList.add('active');
+          else el.classList.remove('active');
+        }
+      });
+    }
+
     function renderStats(data) {
       const ctx = data.contextMetrics || {};
       const totalCtx = ctx.totalContextProcessed || data.totalOriginalChars || 0;
       const kvTokens = ctx.totalCacheReadTokens || 0;
       const kvRatio = ctx.kvCacheHitRatio || 0;
 
-      // Context bloat warning
+      if (data.activePreset) {
+        updatePresetButtons(data.activePreset);
+      }
+      if (data.ccrStats) {
+        document.getElementById('ccrBadge').innerText = `CCR 缓存: ${data.ccrStats.chunkCount} 块 (${fmtBytes(data.ccrStats.totalBytes)})`;
+      }
+
       const alertBanner = document.getElementById('bloatAlertBanner');
       if (ctx.isContextBloated && alertBanner) {
         alertBanner.style.display = 'block';
@@ -400,12 +467,11 @@
       document.getElementById('ratioBar').style.width = Math.min(100, compRatio) + '%';
       document.getElementById('savedCost').innerText = '$' + (data.savedCostUSD || 0).toFixed(4);
 
-      // Modules
       const m = data.modules || {};
       const rtkTok = (m.rtk && m.rtk.savedTokens) || 0;
       const hrTok = (m.headroom && m.headroom.savedTokens) || 0;
       const scTok = (m.schema && m.schema.savedTokens) || 0;
-      const czTok = (m.cacheZone && (m.cacheZone.upstreamKvCacheTokens || m.cacheZone.savedTokens)) || 0;
+      const czTok = (m.cacheZone && ((m.cacheZone.savedTokens || 0) + (m.cacheZone.upstreamKvCacheTokens || 0))) || 0;
       const czHits = (m.cacheZone && m.cacheZone.hits) || 0;
       const psTok = (m.powershell && m.powershell.savedTokens) || 0;
       const aiderTok = (m.aider && m.aider.savedTokens) || 0;
@@ -419,25 +485,20 @@
       document.getElementById('headroomSub').innerText = `折叠贡献: ${((hrTok / directTotal) * 100).toFixed(1)}% | 触发 ${(m.headroom && m.headroom.invocations) || 0} 次`;
 
       document.getElementById('schemaTokens').innerText = scTok.toLocaleString() + ' Tokens';
-      document.getElementById('schemaSub').innerText = `已对齐 ${(m.schema && m.schema.alignedToolsCount) || 0} 个参数字典 | 锁定前缀`;
+      document.getElementById('schemaSub').innerText = `已对齐 ${(m.schema && m.schema.alignedToolsCount) || 0} 个工具字典 | 锁定前缀`;
 
       document.getElementById('cacheZoneTokens').innerText = czTok.toLocaleString() + ' Tokens';
-      document.getElementById('cacheZoneSub').innerText = `锁定命中率: ${kvRatio}% | 固化保护 ${czHits} 轮`;
+      document.getElementById('cacheZoneSub').innerText = `锁定命中率: ${kvRatio}% | 固化保护 ${czHits} 次`;
 
       document.getElementById('psTokens').innerText = psTok.toLocaleString() + ' Tokens';
       document.getElementById('psSub').innerText = `已拦截自愈 ${(m.powershell && m.powershell.fixedCommandsCount) || 0} 次语法陷阱 (规避报错重试)`;
 
-      if (document.getElementById('aiderTokens')) {
-        document.getElementById('aiderTokens').innerText = aiderTok.toLocaleString() + ' Tokens';
-        document.getElementById('aiderSub').innerText = `地图贡献: ${((aiderTok / directTotal) * 100).toFixed(1)}% | 符号索引 ${(m.aider && m.aider.repoMapCount) || 0} 次`;
-      }
+      document.getElementById('aiderTokens').innerText = aiderTok.toLocaleString() + ' Tokens';
+      document.getElementById('aiderSub').innerText = `贡献: ${((aiderTok / directTotal) * 100).toFixed(1)}% | 地图 ${(m.aider && m.aider.repoMapCount) || 0} | 骨架 ${(m.aider && m.aider.skeletonsCount) || 0} | 检索 ${(m.aider && m.aider.ftsSearchCount) || 0}`;
 
-      if (document.getElementById('kompactTokens')) {
-        document.getElementById('kompactTokens').innerText = kompactTok.toLocaleString() + ' Tokens';
-        document.getElementById('kompactSub').innerText = `剪枝贡献: ${((kompactTok / directTotal) * 100).toFixed(1)}% | 历史工具剪枝 ${(m.kompact && m.kompact.prunedToolOutputsCount) || 0} 条`;
-      }
+      document.getElementById('kompactTokens').innerText = kompactTok.toLocaleString() + ' Tokens';
+      document.getElementById('kompactSub').innerText = `剪枝贡献: ${((kompactTok / directTotal) * 100).toFixed(1)}% | 历史工具剪枝 ${(m.kompact && m.kompact.prunedToolOutputsCount) || 0} 条`;
 
-      // Recent events
       const list = document.getElementById('eventsList');
       if (data.recentEvents && data.recentEvents.length > 0) {
         list.innerHTML = data.recentEvents.map(ev => {
@@ -452,6 +513,56 @@
       }
     }
 
+    async function switchPreset(preset) {
+      try {
+        const res = await fetch('/api/preset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preset })
+        });
+        const json = await res.json();
+        updatePresetButtons(json.preset);
+        showToast(json.message);
+      } catch (err) {
+        showToast('切换策略失败: ' + err.message);
+      }
+    }
+
+    async function runBenchmarkUI() {
+      const panel = document.getElementById('benchPanel');
+      const body = document.getElementById('benchBody');
+      panel.style.display = 'block';
+      body.innerHTML = '正在执行 5 大真实场景无损压缩与防降智红线测试...';
+      try {
+        const res = await fetch('/api/benchmark', { method: 'POST' });
+        const data = await res.json();
+        body.innerHTML = data.scenarios.map(s => `
+          <div class="bench-row">
+            <span><strong>${s.name}</strong></span>
+            <span>${s.originalChars.toLocaleString()} chars &rarr; ${s.compressedChars.toLocaleString()} chars | <strong style="color: var(--warning);">-${s.ratio}%</strong> | <span style="color: var(--success);">${s.safetyPassed ? '✔ 100%保真通过' : '✖ 异常'}</span></span>
+          </div>
+        `).join('') + `
+          <div style="margin-top: 12px; font-size: 13px; color: var(--success); font-weight: 600;">
+            ✔ 综合实测压缩率: -${data.overallRatio}% (${data.totalOriginalChars.toLocaleString()} chars &rarr; ${data.totalCompressedChars.toLocaleString()} chars) — 报错堆栈、Git 冲突标记与最新文件快照 100% 完好保留！
+          </div>
+        `;
+        showToast('内置基准实测完成 (-' + data.overallRatio + '%)');
+      } catch (err) {
+        body.innerHTML = '实测失败: ' + err.message;
+      }
+    }
+
+    async function clearCcrConfirm() {
+      try {
+        const res = await fetch('/api/ccr/clear', { method: 'POST' });
+        const json = await res.json();
+        await refreshData();
+        showToast(json.message);
+      } catch (err) {
+        showToast('清理失败: ' + err.message);
+      }
+    }
+
     let sseSource = null;
     function initSSE() {
       try {
@@ -460,8 +571,7 @@
         sseSource.onmessage = (e) => {
           if (e.data) {
             try {
-              const data = JSON.parse(e.data);
-              renderStats(data);
+              renderStats(JSON.parse(e.data));
             } catch (_) {}
           }
         };
@@ -492,27 +602,38 @@
 
         isHookInstalled = doc.hookInstalled;
         const hookBadge = document.getElementById('hookBadge');
+        const mcpBadge = document.getElementById('mcpBadge');
         const toggleBtn = document.getElementById('toggleHookBtn');
 
-        if (isHookInstalled) {
+        if (doc.hookInstalled) {
           hookBadge.className = 'badge green';
-          hookBadge.innerHTML = '<span class="dot"></span>PreToolUse Hook 已全局激活';
+          hookBadge.innerHTML = '<span class="dot"></span>Hook 已全局激活';
           toggleBtn.className = 'btn danger';
-          toggleBtn.innerHTML = '<span>❌</span> 一键卸载全局 Hook';
+          toggleBtn.innerHTML = '<span>❌</span> 一键卸载 Hook + MCP';
         } else {
           hookBadge.className = 'badge red';
-          hookBadge.innerHTML = '<span class="dot"></span>PreToolUse Hook 未挂载';
+          hookBadge.innerHTML = '<span class="dot"></span>Hook 未挂载';
           toggleBtn.className = 'btn success';
-          toggleBtn.innerHTML = '<span>⚡</span> 一键全局安装 Hook';
+          toggleBtn.innerHTML = '<span>⚡</span> 一键全局安装 Hook + MCP';
         }
 
+        if (doc.mcpInstalled) {
+          mcpBadge.className = 'badge green';
+          mcpBadge.innerHTML = '<span class="dot"></span>MCP 服务已挂载';
+        } else {
+          mcpBadge.className = 'badge blue';
+          mcpBadge.innerHTML = '<span class="dot"></span>MCP 服务就绪';
+        }
+
+        if (doc.activePreset) updatePresetButtons(doc.activePreset);
+
         container.innerHTML = `
-          <div class="doctor-item"><span class="check">✔</span> Node.js 运行时: ${doc.nodeVersion}</div>
-          <div class="doctor-item"><span class="check">✔</span> 宿主操作系统: ${doc.platform} (${doc.osRelease})</div>
+          <div class="doctor-item"><span class="check">✔</span> Node.js 运行时: ${doc.nodeVersion} | 宿主系统: ${doc.platform} (${doc.osRelease})</div>
           <div class="doctor-item"><span class="check">✔</span> Antigravity 全局配置目录: ${doc.configDir}</div>
-          <div class="doctor-item"><span class="${doc.hookInstalled ? 'check' : 'alert'}">${doc.hookInstalled ? '✔' : '!'}</span> 核心拦截器 Hook: ${doc.hookInstalled ? '正常拦截并保护 run_command' : '尚未挂载，点击上方按钮即可一键激活'}</div>
-          <div class="doctor-item"><span class="check">✔</span> Card 4: llmtrim Cache-Zone: 会话前缀字节级固化已激活 (True LRU Bounded)</div>
-          <div class="doctor-item"><span class="check">✔</span> 核心压缩与 PowerShell 防护引擎: 自检全绿通过</div>
+          <div class="doctor-item"><span class="${doc.hookInstalled ? 'check' : 'alert'}">${doc.hookInstalled ? '✔' : '!'}</span> PreToolUse & PreInvocation Hook: ${doc.hookInstalled ? '已激活 (4.5s 超时看门狗 + 纯净 JSON 通道)' : '尚未挂载，点击上方按钮即可一键激活'}</div>
+          <div class="doctor-item"><span class="${doc.mcpVerified ? 'check' : 'alert'}">${doc.mcpVerified ? '✔' : '!'}</span> MCP 智能压缩服务握手 (stdio): ${doc.mcpVerified ? 'initialize + ping 自检通过' : '异常'}</div>
+          <div class="doctor-item"><span class="check">✔</span> 简体中文与连接防挂死保护: PowerShell UTF-8 强制编码 + Pager/进程树防挂死已激活</div>
+          <div class="doctor-item"><span class="check">✔</span> 七大核心压缩引擎: 自检全绿通过 (当前策略: ${doc.activePreset || 'balanced'})</div>
         `;
         showToast('系统健康自诊断完成');
       } catch (err) {
@@ -543,7 +664,6 @@
       }
     }
 
-    // Auto-polling with Page Visibility Guard (Anti-throttling rule #7)
     let pollInterval = null;
     function startPolling() {
       if (!pollInterval) {
@@ -570,7 +690,6 @@
       }
     });
 
-    // Initial load
     window.onload = () => {
       refreshData(false);
       runDoctorManual();

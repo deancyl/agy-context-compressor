@@ -1,13 +1,17 @@
 /**
- * Headroom CCR (Content-Compressed Retrieval) Local Chunk Store
+ * Headroom CCR (Content-Compressed Retrieval) Local Chunk Store (2.1)
  * 100% native Node.js zero dependencies.
- * Saves folded chunks to disk so any folded text is 100% reversibly retrievable by MCP tools.
+ * Saves folded chunks to disk so any folded text is 100% reversibly retrievable by MCP tools,
+ * with automatic bounded LRU/TTL cleanup to prevent disk bloat.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+
+const MAX_STORED_CHUNKS = 300;
+let writeCounter = 0;
 
 function getChunkDir() {
   const chunkDir = process.env.AGY_CHUNK_DIR || path.join(os.homedir(), '.gemini', 'antigravity', 'scratch', 'agy-chunks');
@@ -25,8 +29,37 @@ function getChunkDir() {
  * @returns {string}
  */
 function generateChunkId(content) {
-  const hash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 8);
+  const hash = crypto.createHash('sha256').update(String(content)).digest('hex').slice(0, 8);
   return `chk_${hash}`;
+}
+
+/**
+ * Evicts oldest chunk files when total stored chunks exceed maxChunks.
+ * @param {number} [maxChunks=MAX_STORED_CHUNKS]
+ */
+function pruneChunkStore(maxChunks = MAX_STORED_CHUNKS) {
+  try {
+    const dir = getChunkDir();
+    if (!fs.existsSync(dir)) return;
+    const txtFiles = fs.readdirSync(dir).filter(f => f.startsWith('chk_') && f.endsWith('.txt'));
+    if (txtFiles.length <= maxChunks) return;
+
+    const entries = txtFiles.map(f => {
+      const fullPath = path.join(dir, f);
+      let mtimeMs = 0;
+      try {
+        mtimeMs = fs.statSync(fullPath).mtimeMs;
+      } catch (_) {}
+      return { base: f.slice(0, -4), mtimeMs };
+    });
+
+    entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const toRemove = entries.slice(maxChunks);
+    for (const item of toRemove) {
+      try { fs.unlinkSync(path.join(dir, `${item.base}.txt`)); } catch (_) {}
+      try { fs.unlinkSync(path.join(dir, `${item.base}.json`)); } catch (_) {}
+    }
+  } catch (_) {}
 }
 
 /**
@@ -53,6 +86,11 @@ function storeChunk(text, metadata = {}) {
         ...metadata
       };
       fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+
+      writeCounter += 1;
+      if (writeCounter % 25 === 0) {
+        pruneChunkStore();
+      }
     }
   } catch (_) {}
 
@@ -64,7 +102,7 @@ function storeChunk(text, metadata = {}) {
  * @param {string} chunkId
  * @param {number} [startLine] - 1-based start line
  * @param {number} [endLine] - 1-based end line
- * @returns {{ chunkId: string, content: string, totalLines: number, isFound: boolean }}
+ * @returns {{ chunkId: string, content: string, totalLines: number, isFound: boolean, startLine?: number, endLine?: number }}
  */
 function retrieveChunk(chunkId, startLine = 1, endLine = null) {
   if (!chunkId || typeof chunkId !== 'string') {
@@ -108,9 +146,60 @@ function retrieveChunk(chunkId, startLine = 1, endLine = null) {
   }
 }
 
+/**
+ * Returns statistics about the local CCR chunk store.
+ * @returns {{ chunkCount: number, totalBytes: number, dir: string }}
+ */
+function getChunkStoreStats() {
+  const dir = getChunkDir();
+  let chunkCount = 0;
+  let totalBytes = 0;
+  try {
+    if (fs.existsSync(dir)) {
+      const files = fs.readdirSync(dir);
+      for (const f of files) {
+        if (f.startsWith('chk_') && f.endsWith('.txt')) {
+          chunkCount += 1;
+          try {
+            totalBytes += fs.statSync(path.join(dir, f)).size;
+          } catch (_) {}
+        }
+      }
+    }
+  } catch (_) {}
+  return { chunkCount, totalBytes, dir };
+}
+
+/**
+ * Clears all stored CCR chunks from disk.
+ * @returns {{ removedCount: number }}
+ */
+function clearChunkStore() {
+  const dir = getChunkDir();
+  let removedCount = 0;
+  try {
+    if (fs.existsSync(dir)) {
+      const files = fs.readdirSync(dir);
+      for (const f of files) {
+        if (f.startsWith('chk_') && (f.endsWith('.txt') || f.endsWith('.json'))) {
+          try {
+            fs.unlinkSync(path.join(dir, f));
+            if (f.endsWith('.txt')) removedCount += 1;
+          } catch (_) {}
+        }
+      }
+    }
+  } catch (_) {}
+  return { removedCount };
+}
+
 module.exports = {
   getChunkDir,
   generateChunkId,
   storeChunk,
-  retrieveChunk
+  retrieveChunk,
+  pruneChunkStore,
+  getChunkStoreStats,
+  clearChunkStore,
+  MAX_STORED_CHUNKS
 };
