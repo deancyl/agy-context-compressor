@@ -224,13 +224,32 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Endpoint not found' }));
 });
 
+let listenRetries = 0;
 server.on('error', err => {
   if (err.code === 'EADDRINUSE') {
+    if (listenRetries < 5) {
+      listenRetries++;
+      setTimeout(() => {
+        try { server.close(); } catch (_) {}
+        server.listen(PORT, HOST);
+      }, 500);
+      return;
+    }
     process.exit(0);
   } else {
     console.error('[GUI Server Error]', err);
     process.exit(1);
   }
+});
+
+process.on('uncaughtException', err => {
+  try { fs.appendFileSync(path.join(__dirname, 'server-error.log'), `[uncaughtException] ${err.stack || err}\n`); } catch (_) {}
+});
+process.on('unhandledRejection', err => {
+  try { fs.appendFileSync(path.join(__dirname, 'server-error.log'), `[unhandledRejection] ${err.stack || err}\n`); } catch (_) {}
+});
+process.on('exit', code => {
+  try { fs.appendFileSync(path.join(__dirname, 'server-error.log'), `[exit] Code: ${code} at ${new Date().toISOString()}\n`); } catch (_) {}
 });
 
 server.listen(PORT, HOST, () => {

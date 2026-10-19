@@ -536,14 +536,17 @@
       try {
         const res = await fetch('/api/benchmark', { method: 'POST' });
         const data = await res.json();
+        if (!data || !Array.isArray(data.scenarios)) {
+          throw new Error(data.message || data.error || '后端未返回有效的基准数据结构');
+        }
         body.innerHTML = data.scenarios.map(s => `
           <div class="bench-row">
             <span><strong>${s.name}</strong></span>
-            <span>${s.originalChars.toLocaleString()} chars &rarr; ${s.compressedChars.toLocaleString()} chars | <strong style="color: var(--warning);">-${s.ratio}%</strong> | <span style="color: var(--success);">${s.safetyPassed ? '✔ 100%保真通过' : '✖ 异常'}</span></span>
+            <span>${(s.originalChars || 0).toLocaleString()} chars &rarr; ${(s.compressedChars || 0).toLocaleString()} chars | <strong style="color: var(--warning);">-${s.ratio}%</strong> | <span style="color: var(--success);">${s.safetyPassed ? '✔ 100%保真通过' : '✖ 异常'}</span></span>
           </div>
         `).join('') + `
           <div style="margin-top: 12px; font-size: 13px; color: var(--success); font-weight: 600;">
-            ✔ 综合实测压缩率: -${data.overallRatio}% (${data.totalOriginalChars.toLocaleString()} chars &rarr; ${data.totalCompressedChars.toLocaleString()} chars) — 报错堆栈、Git 冲突标记与最新文件快照 100% 完好保留！
+            ✔ 综合实测压缩率: -${data.overallRatio}% (${(data.totalOriginalChars || 0).toLocaleString()} chars &rarr; ${(data.totalCompressedChars || 0).toLocaleString()} chars) — 报错堆栈、Git 冲突标记与最新文件快照 100% 完好保留！
           </div>
         `;
         showToast('内置基准实测完成 (-' + data.overallRatio + '%)');
