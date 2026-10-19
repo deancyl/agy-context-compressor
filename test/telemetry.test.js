@@ -62,3 +62,60 @@ test('formatDashboard: renders clean colorized dashboard without throwing', () =
   assert.ok(dashboard.includes('Card 4: llmtrim'));
   assert.ok(dashboard.includes('Card 5: PowerShell'));
 });
+
+test('recordBatchSavings: records originalChars and totalInvocations exactly once across multiple modules', () => {
+  resetStats();
+  const { recordBatchSavings } = require('../src/core/telemetry');
+
+  // Input of 10,000 characters with savings from 3 modules
+  recordBatchSavings({
+    originalChars: 10000,
+    moduleDeltas: {
+      rtk: 1000,
+      powershell: 500,
+      headroom: 500
+    }
+  });
+
+  const stats = getStats();
+  // Total original characters must be EXACTLY 10000, NOT 30000!
+  assert.strictEqual(stats.totalOriginalChars, 10000);
+  assert.strictEqual(stats.totalSavedChars, 2000);
+  assert.strictEqual(stats.totalCompressedChars, 8000);
+  assert.strictEqual(stats.totalInvocations, 1); // EXACTLY ONCE!
+  // Ratio must be exactly (2000 / 10000) * 100 = 20.0%
+  assert.strictEqual(stats.compressionRatio, 20.0);
+
+  // Modules individually received their exact deltas
+  assert.strictEqual(stats.modules.rtk.savedChars, 1000);
+  assert.strictEqual(stats.modules.powershell.savedChars, 500);
+  assert.strictEqual(stats.modules.headroom.savedChars, 500);
+});
+
+test('resetStats: clears stats to initial zero state and empties event logs', () => {
+  const { recordBatchSavings, getEventsFilePath } = require('../src/core/telemetry');
+  recordBatchSavings({
+    originalChars: 5000,
+    moduleDeltas: { rtk: 1000 }
+  });
+
+  let stats = getStats();
+  assert.ok(stats.totalSavedChars > 0);
+
+  resetStats();
+  stats = getStats();
+  assert.strictEqual(stats.totalSavedChars, 0);
+  assert.strictEqual(stats.totalOriginalChars, 0);
+  assert.strictEqual(stats.savedTokens, 0);
+  assert.strictEqual(stats.totalInvocations, 0);
+  assert.strictEqual(stats.modules.rtk.savedChars, 0);
+  assert.strictEqual(stats.modules.schema.alignedToolsCount, 0);
+  assert.strictEqual(stats.recentEvents.length, 0);
+
+  const fs = require('node:fs');
+  const eventsFile = getEventsFilePath();
+  if (fs.existsSync(eventsFile)) {
+    const content = fs.readFileSync(eventsFile, 'utf8');
+    assert.strictEqual(content.trim(), '');
+  }
+});

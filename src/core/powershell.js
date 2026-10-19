@@ -185,7 +185,13 @@ function fixPowerShellCommandEscaping(cmd, options = {}) {
       }
 
       if (andCount > 0) {
-        buffer += ' }'.repeat(andCount);
+        const closingBraces = ' }'.repeat(andCount);
+        const commentIdx = buffer.search(/(?<!["'])(?:\s+#[^\r\n]*)$/);
+        if (commentIdx !== -1) {
+          buffer = buffer.slice(0, commentIdx) + closingBraces + ' ' + buffer.slice(commentIdx).trim();
+        } else {
+          buffer += closingBraces;
+        }
         result = buffer;
       }
     }

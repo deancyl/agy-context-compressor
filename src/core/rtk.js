@@ -80,6 +80,50 @@ function cleanProgressBars(text) {
   }
 }
 
+function isPassLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+
+  // Absolute safety checks (never fold failures or stack traces)
+  if (RE_FAIL_ICONS.test(line)) return false;
+  if (RE_NOT_OK.test(trimmed)) return false;
+  if (RE_ASSERTION.test(line) && !RE_CHECK_START.test(trimmed)) return false;
+  if (RE_RUNTIME_EXCEPTIONS.test(line)) return false;
+  if (RE_TRACEBACK_START.test(trimmed)) return false;
+  if (RE_AT_STACK.test(line) || RE_PY_STACK.test(line) || RE_C_ERROR.test(line) || RE_RUST_ERROR.test(line)) return false;
+  if (RE_EXPECTED.test(trimmed)) return false;
+  if (RE_CONFLICT_MARKERS.test(line)) return false;
+  if (RE_DIFF_HEADER.test(trimmed)) return false;
+
+  // Positive matchers
+  if (RE_CHECKMARK_PASS.test(trimmed)) return true;
+  if (RE_TAP_PASS.test(trimmed)) return true;
+  if (RE_JEST_PASS.test(trimmed)) return true;
+  if (RE_PYTEST_PASS.test(trimmed) || RE_TEST_PATH_PASS.test(trimmed)) return true;
+  if (RE_CARGO_PASS.test(trimmed)) return true;
+  if (RE_GO_PASS.test(trimmed)) return true;
+  if (RE_GENERIC_PASS.test(trimmed)) return true;
+  if (RE_GTEST_PASS.test(trimmed)) return true;
+  if (RE_CMAKE_PASS.test(trimmed)) return true;
+
+  return false;
+}
+
+function isDockerLayerLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed || /error|failed/i.test(trimmed)) return false;
+  return /^[0-9a-f]{8,12}:\s+(?:Pulling fs layer|Downloading|Extracting|Verifying Checksum|Download complete|Pull complete|Waiting|Already exists|Layer already exists|Pushing|Pushed)/i.test(trimmed);
+}
+
+function isTfRefreshLine(line) {
+  if (typeof line !== 'string') return false;
+  const trimmed = line.trim();
+  if (!trimmed || /error|failed/i.test(trimmed)) return false;
+  return /:\s+Refreshing state\.\.\.(?:\s*\[id=[^\]]+\])?/i.test(trimmed);
+}
+
 /**
  * Positive Test Passes Folding.
  * Inverts matching: strictly matches PASS / ✓ / ok lines and folds runs >= 3,
@@ -96,35 +140,6 @@ function foldTestPasses(text, options = {}) {
     const lines = text.split(/\r?\n/);
     const result = [];
     let passingRun = [];
-
-    const isPassLine = (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return false;
-
-      // Absolute safety checks
-      if (RE_FAIL_ICONS.test(line)) return false;
-      if (RE_NOT_OK.test(trimmed)) return false;
-      if (RE_ASSERTION.test(line) && !RE_CHECK_START.test(trimmed)) return false;
-      if (RE_RUNTIME_EXCEPTIONS.test(line)) return false;
-      if (RE_TRACEBACK_START.test(trimmed)) return false;
-      if (RE_AT_STACK.test(line) || RE_PY_STACK.test(line) || RE_C_ERROR.test(line) || RE_RUST_ERROR.test(line)) return false;
-      if (RE_EXPECTED.test(trimmed)) return false;
-      if (RE_CONFLICT_MARKERS.test(line)) return false;
-      if (RE_DIFF_HEADER.test(trimmed)) return false;
-
-      // Positive matchers
-      if (RE_CHECKMARK_PASS.test(trimmed)) return true;
-      if (RE_TAP_PASS.test(trimmed)) return true;
-      if (RE_JEST_PASS.test(trimmed)) return true;
-      if (RE_PYTEST_PASS.test(trimmed) || RE_TEST_PATH_PASS.test(trimmed)) return true;
-      if (RE_CARGO_PASS.test(trimmed)) return true;
-      if (RE_GO_PASS.test(trimmed)) return true;
-      if (RE_GENERIC_PASS.test(trimmed)) return true;
-      if (RE_GTEST_PASS.test(trimmed)) return true;
-      if (RE_CMAKE_PASS.test(trimmed)) return true;
-
-      return false;
-    };
 
     let folded = false;
     const flushRun = () => {
@@ -264,5 +279,8 @@ module.exports = {
   cleanProgressBars,
   foldTestPasses,
   cleanDockerOutput,
-  cleanTerraformOutput
+  cleanTerraformOutput,
+  isPassLine,
+  isDockerLayerLine,
+  isTfRefreshLine
 };

@@ -7,6 +7,7 @@
  * 3. Parameter window narrow-down for lockfiles & giant files in view_file.
  */
 
+const fs = require('node:fs');
 const path = require('node:path');
 const { fixPowerShellCommandEscaping } = require('../core/powershell');
 const { isLockfilePath } = require('../core/headroom');
@@ -51,7 +52,13 @@ function handlePreToolUse(payload, options = {}) {
       const useWrapper = options.usePipeFilter !== true;
       if (useWrapper) {
         const wrapperPathEscaped = WRAPPER_PATH.replace(/\\/g, '/');
-        optimizedCmd = `node "${wrapperPathEscaped}" -- ${optimizedCmd}`;
+        const needsBase64 = options.useBase64 || /[;&|\n\r]/.test(optimizedCmd);
+        if (needsBase64) {
+          const b64 = Buffer.from(optimizedCmd, 'utf8').toString('base64');
+          optimizedCmd = `node "${wrapperPathEscaped}" --base64 ${b64}`;
+        } else {
+          optimizedCmd = `node "${wrapperPathEscaped}" -- ${optimizedCmd}`;
+        }
       } else {
         const filterPathEscaped = STREAM_FILTER_PATH.replace(/\\/g, '/');
         optimizedCmd = `${optimizedCmd} | node "${filterPathEscaped}"`;
@@ -77,9 +84,21 @@ function handlePreToolUse(payload, options = {}) {
 
       // If viewing a lockfile or minified file without explicitly requesting line boundaries
       if (isLockfileOrMin && !args.StartLine && !args.EndLine) {
-        if (options.recordTelemetry !== false) {
-          recordSavings('headroom', 3000, 4000, { filename: base, note: 'auto_narrow_lockfile' });
+        let fileSize = 0;
+        try {
+          if (fs.existsSync(targetFile)) {
+            fileSize = fs.statSync(targetFile).size;
+          }
+        } catch (_) {}
+
+        if (fileSize > 0 && options.recordTelemetry !== false) {
+          const estimatedAllowed = Math.min(fileSize, 200 * 35);
+          const saved = Math.max(0, fileSize - estimatedAllowed);
+          if (saved > 0) {
+            recordSavings('headroom', saved, fileSize, { filename: base, note: 'auto_narrow_lockfile' });
+          }
         }
+
         return {
           decision: 'allow',
           overwrite: {

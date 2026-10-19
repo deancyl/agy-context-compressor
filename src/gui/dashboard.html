@@ -236,16 +236,17 @@
         <div id="savedTokensSub" class="metric-sub">折合输入 Token 消耗减免</div>
       </div>
       <div class="metric-card">
-        <div class="metric-title">综合上下文配额防护率 <span>⚡</span></div>
+        <div class="metric-title">直接去噪文本压缩率 <span>⚡</span></div>
         <div id="compressionRatio" class="metric-value">0.0%</div>
         <div class="progress-bar-bg">
           <div id="ratioBar" class="progress-bar-fill"></div>
         </div>
+        <div class="metric-sub">直接文本体积缩减比例 (不含 KV Cache)</div>
       </div>
       <div class="metric-card">
         <div class="metric-title">折合减免算力账单 <span>💰</span></div>
         <div id="savedCost" class="metric-value">$0.0000</div>
-        <div class="metric-sub">基于行业大模型基准加权测算</div>
+        <div class="metric-sub">基准单价 $1.00 / 1M Tokens</div>
       </div>
     </div>
 
@@ -350,9 +351,9 @@
       document.getElementById('savedTokens').innerText = (data.savedTokens || 0).toLocaleString();
       document.getElementById('savedTokensSub').innerText = `阻断 ${fmtBytes(data.totalSavedChars || 0)} (${(data.totalSavedChars || 0).toLocaleString()} 字符)`;
 
-      const displayRatio = kvRatio > 0 ? kvRatio : (data.compressionRatio || 0);
-      document.getElementById('compressionRatio').innerText = displayRatio + '%';
-      document.getElementById('ratioBar').style.width = Math.min(100, displayRatio) + '%';
+      const compRatio = data.compressionRatio || 0;
+      document.getElementById('compressionRatio').innerText = compRatio + '%';
+      document.getElementById('ratioBar').style.width = Math.min(100, compRatio) + '%';
       document.getElementById('savedCost').innerText = '$' + (data.savedCostUSD || 0).toFixed(4);
 
       // Modules
@@ -372,7 +373,7 @@
       document.getElementById('headroomSub').innerText = `折叠贡献: ${((hrTok / directTotal) * 100).toFixed(1)}% | 触发 ${(m.headroom && m.headroom.invocations) || 0} 次`;
 
       document.getElementById('schemaTokens').innerText = scTok.toLocaleString() + ' Tokens';
-      document.getElementById('schemaSub').innerText = `已对齐 ${(m.schema && m.schema.alignedToolsCount) || 14} 个参数字典 | 锁定前缀`;
+      document.getElementById('schemaSub').innerText = `已对齐 ${(m.schema && m.schema.alignedToolsCount) || 0} 个参数字典 | 锁定前缀`;
 
       document.getElementById('cacheZoneTokens').innerText = czTok.toLocaleString() + ' Tokens';
       document.getElementById('cacheZoneSub').innerText = `锁定命中率: ${kvRatio}% | 固化保护 ${czHits} 轮`;

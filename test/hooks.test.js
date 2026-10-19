@@ -97,3 +97,37 @@ test('handlePreToolUse: leaves clean commands and normal source files untouched'
   assert.strictEqual(fileResp.decision, 'allow');
   assert.strictEqual(fileResp.overwrite, undefined);
 });
+
+test('handlePreToolUse: uses --base64 wrapping when command contains complex operators like && or quotes', () => {
+  const payload = {
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'npm test && git status'
+      }
+    }
+  };
+
+  const response = handlePreToolUse(payload);
+  assert.strictEqual(response.decision, 'allow');
+  assert.ok(response.overwrite);
+  assert.ok(response.overwrite.CommandLine.includes('--base64'));
+
+  // Extract the base64 token and verify decoded string matches
+  const match = response.overwrite.CommandLine.match(/--base64\s+([A-Za-z0-9+/=]+)/);
+  assert.ok(match, 'base64 payload must be present');
+  const decoded = Buffer.from(match[1], 'base64').toString('utf8');
+  assert.ok(decoded.includes('npm test') && decoded.includes('git status'));
+});
+
+test('agy-exec-wrapper: decodes base64 command and executes cleanly with exit code preserved', () => {
+  const { execSync } = require('node:child_process');
+  const path = require('node:path');
+  const wrapperPath = path.resolve(__dirname, '../bin/agy-exec-wrapper.js');
+
+  const cmdToRun = 'node -e "process.stdout.write(\'hello-from-wrapper\\n\')"';
+  const b64 = Buffer.from(cmdToRun, 'utf8').toString('base64');
+
+  const stdout = execSync(`node "${wrapperPath}" --base64 ${b64}`, { encoding: 'utf8' });
+  assert.ok(stdout.includes('hello-from-wrapper'));
+});

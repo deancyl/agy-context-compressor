@@ -90,8 +90,13 @@ function verifyHookExecution() {
       return { success: false, reason: `Unexpected decision returned: ${JSON.stringify(parsed)}` };
     }
 
-    // Verify that the PowerShell fix actually kicked in:
-    const cmd = parsed.overwrite && parsed.overwrite.CommandLine;
+    let cmd = parsed.overwrite && parsed.overwrite.CommandLine;
+    if (cmd && cmd.includes('--base64')) {
+      const match = cmd.match(/--base64\s+([A-Za-z0-9+/=]+)/);
+      if (match) {
+        cmd = Buffer.from(match[1], 'base64').toString('utf8');
+      }
+    }
     const isWindows = process.platform === 'win32';
     if (isWindows && (!cmd || !cmd.includes('curl.exe') || !cmd.includes('C:\\data\\\\'))) {
       return { success: false, reason: `PowerShell escaping fix failed to trigger on Windows test. Output: ${cmd}` };
