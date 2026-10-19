@@ -246,7 +246,7 @@ function handleToolCall(name, args) {
     const skeleton = extractCodeSkeleton(raw, filePath);
     const delta = raw.length - skeleton.length;
     if (delta > 0) {
-      recordSavings('headroom', delta, raw.length, { filename: path.basename(filePath), type: 'code_skeleton' });
+      recordSavings('aider', delta, raw.length, { filename: path.basename(filePath), type: 'code_skeleton' });
     }
 
     return {
@@ -288,6 +288,12 @@ function handleToolCall(name, args) {
   if (name === 'read_repo_map' || name === 'agy_repo_map') {
     const dir = args.dir_path ? path.resolve(args.dir_path) : process.cwd();
     const res = generateRepoMap(dir, { maxFiles: args.max_files || 40 });
+    const estSavedChars = Math.max(2500, (res.symbolCount || 10) * 85);
+    recordSavings('aider', estSavedChars, estSavedChars + 1000, {
+      note: 'generate_repo_map',
+      fileCount: res.fileCount,
+      symbolCount: res.symbolCount
+    });
     return {
       content: [{
         type: 'text',

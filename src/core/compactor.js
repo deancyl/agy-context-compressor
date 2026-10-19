@@ -426,7 +426,7 @@ function pruneHistoricalToolOutputs(messages, options = {}) {
   if (savedChars > 0 && options.recordTelemetry !== false) {
     try {
       const { recordSavings } = require('./telemetry');
-      recordSavings('headroom', savedChars, totalOriginalChars, {
+      recordSavings('kompact', savedChars, totalOriginalChars, {
         note: 'prune_historical_tool_outputs',
         prunedCount
       });

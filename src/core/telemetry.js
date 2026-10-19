@@ -64,7 +64,9 @@ function getInitialStats() {
       headroom: { savedChars: 0, savedTokens: 0, invocations: 0 },
       schema: { savedChars: 0, savedTokens: 0, alignedToolsCount: 0 },
       cacheZone: { savedChars: 0, savedTokens: 0, hits: 0, upstreamKvCacheTokens: 0 },
-      powershell: { savedChars: 0, savedTokens: 0, fixedCommandsCount: 0 }
+      powershell: { savedChars: 0, savedTokens: 0, fixedCommandsCount: 0 },
+      aider: { savedChars: 0, savedTokens: 0, repoMapCount: 0, skeletonsCount: 0, invocations: 0 },
+      kompact: { savedChars: 0, savedTokens: 0, prunedToolOutputsCount: 0, invocations: 0 }
     },
     recentEvents: [],
     createdAt: now,
@@ -96,6 +98,8 @@ function loadStats(force = false) {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       statsCache = { ...getInitialStats(), ...data };
       if (!statsCache.modules) statsCache.modules = getInitialStats().modules;
+      if (!statsCache.modules.aider) statsCache.modules.aider = { savedChars: 0, savedTokens: 0, repoMapCount: 0, skeletonsCount: 0, invocations: 0 };
+      if (!statsCache.modules.kompact) statsCache.modules.kompact = { savedChars: 0, savedTokens: 0, prunedToolOutputsCount: 0, invocations: 0 };
       lastLoadedMtime = currentMtime;
     } catch (e) {
       // Fallback
@@ -180,12 +184,21 @@ function recordSavings(moduleName, deltaChars, originalChars = 0, metadata = {})
     stats.compressionRatio = parseFloat(((stats.totalSavedChars / stats.totalOriginalChars) * 100).toFixed(1));
   }
 
-  if (stats.modules && stats.modules[moduleName]) {
-    stats.modules[moduleName].savedChars += deltaChars;
-    stats.modules[moduleName].savedTokens += tokens;
-    if (stats.modules[moduleName].invocations !== undefined) {
-      stats.modules[moduleName].invocations += 1;
-    }
+  if (!stats.modules) stats.modules = {};
+  if (!stats.modules[moduleName]) {
+    stats.modules[moduleName] = { savedChars: 0, savedTokens: 0, invocations: 0 };
+  }
+  stats.modules[moduleName].savedChars += deltaChars;
+  stats.modules[moduleName].savedTokens += tokens;
+  if (stats.modules[moduleName].invocations !== undefined) {
+    stats.modules[moduleName].invocations += 1;
+  }
+  if (moduleName === 'aider') {
+    if (metadata.note === 'generate_repo_map') stats.modules.aider.repoMapCount = (stats.modules.aider.repoMapCount || 0) + 1;
+    if (metadata.type === 'code_skeleton') stats.modules.aider.skeletonsCount = (stats.modules.aider.skeletonsCount || 0) + 1;
+  }
+  if (moduleName === 'kompact') {
+    stats.modules.kompact.prunedToolOutputsCount = (stats.modules.kompact.prunedToolOutputsCount || 0) + (metadata.prunedCount || 1);
   }
 
   const event = {
@@ -357,12 +370,16 @@ function formatDashboard() {
   const schemaTokens = stats.modules.schema?.savedTokens || 0;
   const cacheZoneTokens = stats.modules.cacheZone?.savedTokens || 0;
   const psTokens = stats.modules.powershell?.savedTokens || 0;
+  const aiderTokens = stats.modules.aider?.savedTokens || 0;
+  const kompactTokens = stats.modules.kompact?.savedTokens || 0;
 
-  const toolBase = (rtkTokens + headroomTokens + schemaTokens + psTokens) || 1;
+  const toolBase = (rtkTokens + headroomTokens + schemaTokens + psTokens + aiderTokens + kompactTokens) || 1;
   const rtkPct = ((rtkTokens / toolBase) * 100).toFixed(1);
   const headroomPct = ((headroomTokens / toolBase) * 100).toFixed(1);
   const schemaPct = ((schemaTokens / toolBase) * 100).toFixed(1);
   const psPct = ((psTokens / toolBase) * 100).toFixed(1);
+  const aiderPct = ((aiderTokens / toolBase) * 100).toFixed(1);
+  const kompactPct = ((kompactTokens / toolBase) * 100).toFixed(1);
 
   const ctx = stats.contextMetrics || {};
   const totalContext = ctx.totalContextProcessed || stats.totalOriginalChars || 0;
@@ -394,6 +411,10 @@ function formatDashboard() {
     `    \x1b[90m(会话前缀字节流锁定: 活跃 | 原厂 KV Cache 固化保护: ${stats.modules.cacheZone?.hits || 0} 轮)\x1b[0m`,
     `  • \x1b[1mCard 5: PowerShell 报错去噪\x1b[0m   : ${fmtNum(psTokens).padStart(9)} Tokens (${psPct.padStart(5)}%) [${bar(psPct, 12)}]`,
     `    \x1b[90m(已自动拦截修复 Windows 命令语法陷阱: ${stats.modules.powershell?.fixedCommandsCount || 0} 次)\x1b[0m`,
+    `  • \x1b[1mCard 6: Aider AST 符号地图\x1b[0m    : ${fmtNum(aiderTokens).padStart(9)} Tokens (${aiderPct.padStart(5)}%) [${bar(aiderPct, 12)}]`,
+    `    \x1b[90m(Repo Map 符号拓扑索引: ${stats.modules.aider?.repoMapCount || 0} 次 | 代码骨架: ${stats.modules.aider?.skeletonsCount || 0} 次)\x1b[0m`,
+    `  • \x1b[1mCard 7: Kompact 历史工具剪枝\x1b[0m : ${fmtNum(kompactTokens).padStart(9)} Tokens (${kompactPct.padStart(5)}%) [${bar(kompactPct, 12)}]`,
+    `    \x1b[90m(多轮历史旧工具输出掏空: ${stats.modules.kompact?.prunedToolOutputsCount || 0} 条 | 附带 CCR 暂存待查)\x1b[0m`,
     ''
   ];
 

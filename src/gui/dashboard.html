@@ -306,6 +306,24 @@
         <div id="psTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
         <div id="psSub" class="metric-sub">拦截转义陷阱 0 次</div>
       </div>
+      <div class="module-card">
+        <div class="module-header">
+          <div class="module-name">Card 6: Aider AST 符号地图</div>
+          <span class="module-tag">Aider Engine</span>
+        </div>
+        <div class="module-desc">Repo Map 符号拓扑索引、精准带行号大纲。先查地图后切片，消灭 80% 源码盲读。</div>
+        <div id="aiderTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
+        <div id="aiderSub" class="metric-sub">符号索引 0 次 | 骨架模式 0 次</div>
+      </div>
+      <div class="module-card">
+        <div class="module-header">
+          <div class="module-name">Card 7: Kompact 历史工具剪枝</div>
+          <span class="module-tag">Kompact Engine</span>
+        </div>
+        <div class="module-desc">滑动窗口修剪多轮历史旧输出 (>4 轮只读掏空为占位符)。报错绝对豁免 + CCR 可逆回查。</div>
+        <div id="kompactTokens" style="font-size: 16px; font-weight: 700; color: #fff;">0 Tokens</div>
+        <div id="kompactSub" class="metric-sub">历史工具剪枝 0 条 | CCR 暂存</div>
+      </div>
     </div>
 
     <!-- Doctor & Recent Events -->
@@ -390,7 +408,9 @@
       const czTok = (m.cacheZone && m.cacheZone.savedTokens) || 0;
       const czHits = (m.cacheZone && m.cacheZone.hits) || 0;
       const psTok = (m.powershell && m.powershell.savedTokens) || 0;
-      const directTotal = (rtkTok + hrTok + scTok + psTok) || 1;
+      const aiderTok = (m.aider && m.aider.savedTokens) || 0;
+      const kompactTok = (m.kompact && m.kompact.savedTokens) || 0;
+      const directTotal = (rtkTok + hrTok + scTok + psTok + aiderTok + kompactTok) || 1;
 
       document.getElementById('rtkTokens').innerText = rtkTok.toLocaleString() + ' Tokens';
       document.getElementById('rtkSub').innerText = `去噪贡献: ${((rtkTok / directTotal) * 100).toFixed(1)}% | 触发 ${(m.rtk && m.rtk.invocations) || 0} 次`;
@@ -406,6 +426,16 @@
 
       document.getElementById('psTokens').innerText = psTok.toLocaleString() + ' Tokens';
       document.getElementById('psSub').innerText = `已拦截自愈 ${(m.powershell && m.powershell.fixedCommandsCount) || 0} 次语法陷阱 (规避报错重试)`;
+
+      if (document.getElementById('aiderTokens')) {
+        document.getElementById('aiderTokens').innerText = aiderTok.toLocaleString() + ' Tokens';
+        document.getElementById('aiderSub').innerText = `地图贡献: ${((aiderTok / directTotal) * 100).toFixed(1)}% | 符号索引 ${(m.aider && m.aider.repoMapCount) || 0} 次`;
+      }
+
+      if (document.getElementById('kompactTokens')) {
+        document.getElementById('kompactTokens').innerText = kompactTok.toLocaleString() + ' Tokens';
+        document.getElementById('kompactSub').innerText = `剪枝贡献: ${((kompactTok / directTotal) * 100).toFixed(1)}% | 历史工具剪枝 ${(m.kompact && m.kompact.prunedToolOutputsCount) || 0} 条`;
+      }
 
       // Recent events
       const list = document.getElementById('eventsList');
