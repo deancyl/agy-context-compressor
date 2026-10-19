@@ -30,7 +30,7 @@ function handlePreToolUse(payload, options = {}) {
 
   // 1. Intercept run_command
   if (toolName === 'run_command') {
-    const rawCmd = args.CommandLine || '';
+    const rawCmd = args.CommandLine || args.command || args.cmd || '';
     if (!rawCmd) {
       return { decision: 'allow' };
     }
@@ -52,13 +52,9 @@ function handlePreToolUse(payload, options = {}) {
       const useWrapper = options.usePipeFilter !== true;
       if (useWrapper) {
         const wrapperPathEscaped = WRAPPER_PATH.replace(/\\/g, '/');
-        const needsBase64 = options.useBase64 || /[;&|\n\r]/.test(optimizedCmd);
-        if (needsBase64) {
-          const b64 = Buffer.from(optimizedCmd, 'utf8').toString('base64');
-          optimizedCmd = `node "${wrapperPathEscaped}" --base64 ${b64}`;
-        } else {
-          optimizedCmd = `node "${wrapperPathEscaped}" -- ${optimizedCmd}`;
-        }
+        const b64 = Buffer.from(optimizedCmd, 'utf8').toString('base64');
+        // Dual embedding: --base64 <b64> -- <cmd> preserves quote integrity and ensures backward compatibility
+        optimizedCmd = `node "${wrapperPathEscaped}" --base64 ${b64} -- ${optimizedCmd}`;
       } else {
         const filterPathEscaped = STREAM_FILTER_PATH.replace(/\\/g, '/');
         optimizedCmd = `${optimizedCmd} | node "${filterPathEscaped}"`;
@@ -66,10 +62,12 @@ function handlePreToolUse(payload, options = {}) {
     }
 
     if (optimizedCmd !== rawCmd) {
+      const cmdKey = ('CommandLine' in args) ? 'CommandLine' : (('command' in args) ? 'command' : 'cmd');
       return {
         decision: 'allow',
         overwrite: {
-          CommandLine: optimizedCmd
+          ...args,
+          [cmdKey]: optimizedCmd
         }
       };
     }
@@ -109,23 +107,29 @@ function handlePreToolUse(payload, options = {}) {
         };
       }
 
-      // Case B: Unbounded view_file on large source files (> 10KB or ~250 lines)
+      // Case B: Unbounded view_file on large source files (> 350 lines or > 10KB)
       // Prevents agent dumping 800-line (~30KB) files into context blindly
-      if (!args.StartLine && !args.EndLine && fileSize > 10000) {
-        const estimatedAllowed = Math.min(fileSize, 300 * 45);
-        const saved = Math.max(0, fileSize - estimatedAllowed);
-        if (saved > 0 && options.recordTelemetry !== false) {
-          recordSavings('headroom', saved, fileSize, { filename: base, note: 'auto_narrow_large_source' });
-        }
-
-        return {
-          decision: 'allow',
-          overwrite: {
-            ...args,
-            StartLine: 1,
-            EndLine: 300
+      if (options.autoNarrowLargeFiles !== false && !args.StartLine && !args.EndLine && fs.existsSync(targetFile)) {
+        try {
+          if (fileSize > 10000) {
+            const content = fs.readFileSync(targetFile, 'utf8');
+            const lines = content.split(/\r?\n/);
+            if (lines.length > 350) {
+              const savedChars = Math.max(1000, content.length - lines.slice(0, 250).join('\n').length);
+              if (options.recordTelemetry !== false) {
+                recordSavings('headroom', savedChars, content.length, { filename: base, note: 'auto_narrow_large_source' });
+              }
+              return {
+                decision: 'allow',
+                overwrite: {
+                  ...args,
+                  StartLine: 1,
+                  EndLine: 250
+                }
+              };
+            }
           }
-        };
+        } catch (_) {}
       }
 
       // Case C: Excessive slice window (> 400 lines requested at once)
@@ -142,6 +146,22 @@ function handlePreToolUse(payload, options = {}) {
           overwrite: {
             ...args,
             EndLine: cappedEndLine
+          }
+        };
+      }
+    }
+  }
+
+  // 3. Intercept grep_search: auto-exclude noisy build & dependency directories
+  if (toolName === 'grep_search') {
+    const searchPath = args.path || args.dir || args.directory || '';
+    if (!searchPath || searchPath === '.' || searchPath === './') {
+      if (!args.exclude && !args.exclude_dirs && !args.glob) {
+        return {
+          decision: 'allow',
+          overwrite: {
+            ...args,
+            exclude_dirs: 'node_modules,.git,dist,build,coverage,.gemini,.next'
           }
         };
       }

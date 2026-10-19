@@ -142,7 +142,7 @@ test('handlePreInvocation: returns zero-pollution ephemeral optimization reminde
   assert.ok(res.injectSteps[0].ephemeralMessage.includes('>300 lines'));
 });
 
-test('handlePreToolUse: auto-narrows unbounded large source files to 1-300 lines', () => {
+test('handlePreToolUse: auto-narrows unbounded large source files to 1-250 lines', () => {
   const fs = require('node:fs');
   const os = require('node:os');
   const tmpLargeFile = path.join(os.tmpdir(), `agy-test-large-${Date.now()}.js`);
@@ -154,7 +154,9 @@ test('handlePreToolUse: auto-narrows unbounded large source files to 1-300 lines
       toolCall: {
         name: 'view_file',
         args: {
-          AbsolutePath: tmpLargeFile
+          AbsolutePath: tmpLargeFile,
+          toolSummary: 'View large file',
+          toolAction: 'Viewing file'
         }
       }
     };
@@ -163,7 +165,9 @@ test('handlePreToolUse: auto-narrows unbounded large source files to 1-300 lines
     assert.strictEqual(res.decision, 'allow');
     assert.ok(res.overwrite);
     assert.strictEqual(res.overwrite.StartLine, 1);
-    assert.strictEqual(res.overwrite.EndLine, 300);
+    assert.strictEqual(res.overwrite.EndLine, 250);
+    // Preserves other tool arguments
+    assert.strictEqual(res.overwrite.toolSummary, 'View large file');
   } finally {
     try { fs.unlinkSync(tmpLargeFile); } catch (_) {}
   }
@@ -185,6 +189,24 @@ test('handlePreToolUse: caps excessive slice windows to 350 lines', () => {
   assert.strictEqual(res.decision, 'allow');
   assert.ok(res.overwrite);
   assert.strictEqual(res.overwrite.EndLine, 100 + 350); // capped to 450
+});
+
+test('handlePreToolUse: auto-excludes noise directories on root grep_search', () => {
+  const payload = {
+    toolCall: {
+      name: 'grep_search',
+      args: {
+        path: '.',
+        pattern: 'handlePreToolUse'
+      }
+    }
+  };
+
+  const res = handlePreToolUse(payload);
+  assert.strictEqual(res.decision, 'allow');
+  assert.ok(res.overwrite);
+  assert.strictEqual(res.overwrite.exclude_dirs, 'node_modules,.git,dist,build,coverage,.gemini,.next');
+  assert.strictEqual(res.overwrite.pattern, 'handlePreToolUse');
 });
 
 test('HIGH_NOISE_COMMANDS_REGEX: matches custom node, python, and bash script executions', () => {
