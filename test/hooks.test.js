@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const path = require('node:path');
 const { handlePreToolUse } = require('../src/hooks/pre-tool-use');
 
 test('handlePreToolUse: rewrites run_command with PowerShell escaping fixes', () => {
@@ -130,4 +131,68 @@ test('agy-exec-wrapper: decodes base64 command and executes cleanly with exit co
 
   const stdout = execSync(`node "${wrapperPath}" --base64 ${b64}`, { encoding: 'utf8' });
   assert.ok(stdout.includes('hello-from-wrapper'));
+});
+
+test('handlePreInvocation: returns zero-pollution ephemeral optimization reminder', () => {
+  const { handlePreInvocation } = require('../src/hooks/pre-invocation');
+  const res = handlePreInvocation();
+  assert.ok(Array.isArray(res.injectSteps));
+  assert.strictEqual(res.injectSteps.length, 1);
+  assert.ok(res.injectSteps[0].ephemeralMessage.includes('AGY Context Optimization Active'));
+  assert.ok(res.injectSteps[0].ephemeralMessage.includes('>300 lines'));
+});
+
+test('handlePreToolUse: auto-narrows unbounded large source files to 1-300 lines', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const tmpLargeFile = path.join(os.tmpdir(), `agy-test-large-${Date.now()}.js`);
+  // Create a 20KB file (~1000 lines)
+  fs.writeFileSync(tmpLargeFile, '// Large test file\n'.repeat(1000), 'utf8');
+
+  try {
+    const payload = {
+      toolCall: {
+        name: 'view_file',
+        args: {
+          AbsolutePath: tmpLargeFile
+        }
+      }
+    };
+
+    const res = handlePreToolUse(payload);
+    assert.strictEqual(res.decision, 'allow');
+    assert.ok(res.overwrite);
+    assert.strictEqual(res.overwrite.StartLine, 1);
+    assert.strictEqual(res.overwrite.EndLine, 300);
+  } finally {
+    try { fs.unlinkSync(tmpLargeFile); } catch (_) {}
+  }
+});
+
+test('handlePreToolUse: caps excessive slice windows to 350 lines', () => {
+  const payload = {
+    toolCall: {
+      name: 'view_file',
+      args: {
+        AbsolutePath: 'C:/project/app.js',
+        StartLine: 100,
+        EndLine: 800 // 700 lines requested!
+      }
+    }
+  };
+
+  const res = handlePreToolUse(payload);
+  assert.strictEqual(res.decision, 'allow');
+  assert.ok(res.overwrite);
+  assert.strictEqual(res.overwrite.EndLine, 100 + 350); // capped to 450
+});
+
+test('HIGH_NOISE_COMMANDS_REGEX: matches custom node, python, and bash script executions', () => {
+  const { HIGH_NOISE_COMMANDS_REGEX } = require('../src/hooks/pre-tool-use');
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('node test_router.js'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('node src/index.mjs'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('python test_suite.py'));
+  assert.ok(HIGH_NOISE_COMMANDS_REGEX.test('bash ./run_tests.sh'));
+  // Does not match harmless syntax checks
+  assert.strictEqual(HIGH_NOISE_COMMANDS_REGEX.test('node -c server.js'), false);
 });

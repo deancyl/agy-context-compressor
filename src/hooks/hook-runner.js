@@ -6,6 +6,7 @@
  */
 
 const { handlePreToolUse } = require('./pre-tool-use');
+const { handlePreInvocation } = require('./pre-invocation');
 
 const hookType = process.argv[2] || 'pre-tool-use';
 
@@ -23,11 +24,14 @@ process.stdin.on('end', () => {
 
     if (hookType === 'pre-tool-use') {
       response = handlePreToolUse(payload);
+    } else if (hookType === 'pre-invocation') {
+      response = handlePreInvocation(payload);
     }
 
     process.stdout.write(JSON.stringify(response));
   } catch (err) {
     // Fail-safe: Always allow tool execution if hook fails
-    process.stdout.write(JSON.stringify({ decision: 'allow' }));
+    const fallback = hookType === 'pre-invocation' ? { injectSteps: [] } : { decision: 'allow' };
+    process.stdout.write(JSON.stringify(fallback));
   }
 });

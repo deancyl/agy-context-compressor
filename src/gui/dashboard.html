@@ -218,6 +218,14 @@
       </button>
     </div>
 
+    <!-- Context Bloat Warning Banner -->
+    <div id="bloatAlertBanner" style="display: none; background: #3d2314; border: 1px solid #d97706; border-radius: 10px; padding: 14px 18px; margin-bottom: 20px; color: #fde68a; font-size: 13px;">
+      <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+        <span>⚠</span> <span>历史上下文滚雪球预警 (Context Bloat Alert)</span>
+      </div>
+      <div id="bloatAlertMessage">单轮上下文已超阈值，建议使用 /compact 压缩历史以防额度激增。</div>
+    </div>
+
     <!-- Hero Metrics -->
     <div class="hero-grid">
       <div class="metric-card">
@@ -341,6 +349,24 @@
       const totalCtx = ctx.totalContextProcessed || data.totalOriginalChars || 0;
       const kvTokens = ctx.totalCacheReadTokens || 0;
       const kvRatio = ctx.kvCacheHitRatio || 0;
+
+      // Context bloat warning
+      const alertBanner = document.getElementById('bloatAlertBanner');
+      if (ctx.isContextBloated && alertBanner) {
+        alertBanner.style.display = 'block';
+        document.getElementById('bloatAlertMessage').innerText = ctx.bloatMessage;
+        if (ctx.bloatLevel === 'severe') {
+          alertBanner.style.background = '#3d1414';
+          alertBanner.style.borderColor = '#ef4444';
+          alertBanner.style.color = '#fecaca';
+        } else {
+          alertBanner.style.background = '#3d2314';
+          alertBanner.style.borderColor = '#d97706';
+          alertBanner.style.color = '#fde68a';
+        }
+      } else if (alertBanner) {
+        alertBanner.style.display = 'none';
+      }
 
       document.getElementById('totalContextTokens').innerText = totalCtx.toLocaleString();
       document.getElementById('totalContextSub').innerText = `涵盖 ${ctx.plannerResponsesCount || 0} 轮轨迹、思考链与工具输出`;

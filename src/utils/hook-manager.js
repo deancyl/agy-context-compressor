@@ -102,6 +102,21 @@ function verifyHookExecution() {
       return { success: false, reason: `PowerShell escaping fix failed to trigger on Windows test. Output: ${cmd}` };
     }
 
+    // Also verify pre-invocation ephemeral injection
+    const resInvoc = spawnSync(process.execPath, [HOOK_RUNNER_PATH, 'pre-invocation'], {
+      input: '{}',
+      encoding: 'utf8',
+      timeout: 3000
+    });
+    if (resInvoc.status === 0 && resInvoc.stdout) {
+      try {
+        const parsedInvoc = JSON.parse(resInvoc.stdout.trim());
+        if (!Array.isArray(parsedInvoc.injectSteps)) {
+          return { success: false, reason: 'PreInvocation hook did not return injectSteps array' };
+        }
+      } catch (_) {}
+    }
+
     return { success: true, output: parsed };
   } catch (err) {
     return { success: false, reason: `Verification exception: ${err.message}` };
@@ -109,7 +124,7 @@ function verifyHookExecution() {
 }
 
 /**
- * Installs the PreToolUse hook into the target hooks.json.
+ * Installs the PreToolUse & PreInvocation hooks into the target hooks.json.
  * Automatically backs up existing file, writes atomically, and self-verifies live execution.
  * @param {'global'|'project'} [target='global']
  * @returns {{ success: boolean, path: string, backupPath: string|null, verified: boolean }}
@@ -143,7 +158,8 @@ function installHook(target = 'global') {
   }
 
   // Preserve all other hooks, only add or update agy-context-compressor
-  const hookCommand = `node "${HOOK_RUNNER_PATH.replace(/\\/g, '/')}" pre-tool-use`;
+  const hookCommandPreTool = `node "${HOOK_RUNNER_PATH.replace(/\\/g, '/')}" pre-tool-use`;
+  const hookCommandPreInvoc = `node "${HOOK_RUNNER_PATH.replace(/\\/g, '/')}" pre-invocation`;
   hooksConfig['agy-context-compressor'] = {
     enabled: true,
     PreToolUse: [
@@ -152,10 +168,17 @@ function installHook(target = 'global') {
         hooks: [
           {
             type: 'command',
-            command: hookCommand,
+            command: hookCommandPreTool,
             timeout: 10
           }
         ]
+      }
+    ],
+    PreInvocation: [
+      {
+        type: 'command',
+        command: hookCommandPreInvoc,
+        timeout: 5
       }
     ]
   };

@@ -17,7 +17,7 @@ const WRAPPER_PATH = path.resolve(__dirname, '../../bin/agy-exec-wrapper.js');
 const STREAM_FILTER_PATH = path.resolve(__dirname, 'stream-filter.js');
 
 // Broad developer CLI tools that produce terminal noise, ANSI sequences, progress bars, or verbose logs
-const HIGH_NOISE_COMMANDS_REGEX = /(?:^|[;&|\s])(?:git(?:\.exe)?\s+(?:diff|log|status|show|blame|branch)|npm(?:\.cmd)?|npx(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?|bun(?:\.exe)?|deno(?:\.exe)?|pip(?:\.exe)?|poetry(?:\.exe)?|pytest(?:\.exe)?|cargo(?:\.exe)?|go(?:\.exe)?|mvn(?:\.cmd)?|gradle(?:\.bat)?|dotnet(?:\.exe)?|docker(?:\.exe)?|podman(?:\.exe)?|kubectl(?:\.exe)?|terraform(?:\.exe)?|dir|ls|Get-ChildItem|gci|tree|find|findstr|grep|rg|cat|type|Get-Content|gc|tsc(?:\.cmd)?|eslint(?:\.cmd)?|prettier(?:\.cmd)?|ruff(?:\.exe)?|curl(?:\.exe)?|Invoke-WebRequest|iwr|wget)\b/i;
+const HIGH_NOISE_COMMANDS_REGEX = /(?:^|[;&|\s])(?:git(?:\.exe)?\s+(?:diff|log|status|show|blame|branch)|npm(?:\.cmd)?|npx(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?|bun(?:\.exe)?|deno(?:\.exe)?|pip(?:\.exe)?|poetry(?:\.exe)?|pytest(?:\.exe)?|cargo(?:\.exe)?|go(?:\.exe)?|mvn(?:\.cmd)?|gradle(?:\.bat)?|dotnet(?:\.exe)?|docker(?:\.exe)?|podman(?:\.exe)?|kubectl(?:\.exe)?|terraform(?:\.exe)?|dir|ls|Get-ChildItem|gci|tree|find|findstr|grep|rg|cat|type|Get-Content|gc|tsc(?:\.cmd)?|eslint(?:\.cmd)?|prettier(?:\.cmd)?|ruff(?:\.exe)?|curl(?:\.exe)?|Invoke-WebRequest|iwr|wget|node(?:\.exe)?\s+[\w\.\/\\-]+\.(?:js|mjs|cjs|ts)|python(?:\.exe)?\s+[\w\.\/\\-]+\.py|bash\s+[\w\.\/\\-]+\.sh)\b/i;
 
 function handlePreToolUse(payload, options = {}) {
   const toolCall = payload && payload.toolCall;
@@ -75,22 +75,22 @@ function handlePreToolUse(payload, options = {}) {
     }
   }
 
-  // 2. Intercept view_file: Narrow giant lockfiles and minified assets
+  // 2. Intercept view_file: Narrow giant lockfiles, minified assets, and unbounded large files
   if (toolName === 'view_file') {
     const targetFile = args.AbsolutePath || args.TargetFile || args.path || '';
     if (targetFile && typeof targetFile === 'string') {
       const base = path.basename(targetFile).toLowerCase();
       const isLockfileOrMin = isLockfilePath(base) || /\.(min\.js|min\.css|map|lockb?)$/i.test(base);
 
-      // If viewing a lockfile or minified file without explicitly requesting line boundaries
-      if (isLockfileOrMin && !args.StartLine && !args.EndLine) {
-        let fileSize = 0;
-        try {
-          if (fs.existsSync(targetFile)) {
-            fileSize = fs.statSync(targetFile).size;
-          }
-        } catch (_) {}
+      let fileSize = 0;
+      try {
+        if (fs.existsSync(targetFile)) {
+          fileSize = fs.statSync(targetFile).size;
+        }
+      } catch (_) {}
 
+      // Case A: Lockfiles and minified files without line boundaries
+      if (isLockfileOrMin && !args.StartLine && !args.EndLine) {
         if (fileSize > 0 && options.recordTelemetry !== false) {
           const estimatedAllowed = Math.min(fileSize, 200 * 35);
           const saved = Math.max(0, fileSize - estimatedAllowed);
@@ -105,6 +105,43 @@ function handlePreToolUse(payload, options = {}) {
             ...args,
             StartLine: 1,
             EndLine: 200
+          }
+        };
+      }
+
+      // Case B: Unbounded view_file on large source files (> 10KB or ~250 lines)
+      // Prevents agent dumping 800-line (~30KB) files into context blindly
+      if (!args.StartLine && !args.EndLine && fileSize > 10000) {
+        const estimatedAllowed = Math.min(fileSize, 300 * 45);
+        const saved = Math.max(0, fileSize - estimatedAllowed);
+        if (saved > 0 && options.recordTelemetry !== false) {
+          recordSavings('headroom', saved, fileSize, { filename: base, note: 'auto_narrow_large_source' });
+        }
+
+        return {
+          decision: 'allow',
+          overwrite: {
+            ...args,
+            StartLine: 1,
+            EndLine: 300
+          }
+        };
+      }
+
+      // Case C: Excessive slice window (> 400 lines requested at once)
+      if (args.StartLine && args.EndLine && (args.EndLine - args.StartLine > 400)) {
+        const cappedEndLine = args.StartLine + 350;
+        const savedLines = args.EndLine - cappedEndLine;
+        const savedChars = savedLines * 40;
+        if (savedChars > 0 && options.recordTelemetry !== false) {
+          recordSavings('headroom', savedChars, savedChars + 350 * 40, { filename: base, note: 'cap_slice_window' });
+        }
+
+        return {
+          decision: 'allow',
+          overwrite: {
+            ...args,
+            EndLine: cappedEndLine
           }
         };
       }

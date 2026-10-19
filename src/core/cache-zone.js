@@ -132,6 +132,8 @@ function analyzeTranscriptCache(transcriptPath) {
     return result;
   }
 
+  let latestTurnTokens = 0;
+
   try {
     const content = fs.readFileSync(transcriptPath, 'utf8');
     const lines = content.split('\n');
@@ -147,6 +149,7 @@ function analyzeTranscriptCache(transcriptPath) {
           result.totalInputTokens += inp;
           result.totalCacheReadTokens += cache;
           result.totalOutputTokens += out;
+          latestTurnTokens = inp + cache;
         }
       } catch (_) {}
     }
@@ -157,6 +160,19 @@ function analyzeTranscriptCache(transcriptPath) {
     }
   } catch (err) {
     // Safe return fallback
+  }
+
+  result.latestTurnTokens = latestTurnTokens;
+  result.isContextBloated = latestTurnTokens > 80000 || result.plannerResponsesCount > 50;
+  if (latestTurnTokens > 120000 || result.plannerResponsesCount > 100) {
+    result.bloatLevel = 'severe';
+    result.bloatMessage = `单轮上下文已达 ${latestTurnTokens.toLocaleString()} Tokens (会话已历经 ${result.plannerResponsesCount} 轮)。历史滚雪球严重，强烈建议在输入框使用 /compact 命令压缩历史，或开启新任务。`;
+  } else if (result.isContextBloated) {
+    result.bloatLevel = 'elevated';
+    result.bloatMessage = `单轮上下文已达 ${latestTurnTokens.toLocaleString()} Tokens (共 ${result.plannerResponsesCount} 轮)，建议关注历史体积，适时使用 /compact。`;
+  } else {
+    result.bloatLevel = 'normal';
+    result.bloatMessage = '上下文体积健康，处于最佳推理区间。';
   }
 
   result.totalContextProcessed = result.totalInputTokens + result.totalCacheReadTokens + result.totalOutputTokens;

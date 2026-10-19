@@ -369,6 +369,9 @@ function formatDashboard() {
     `  \x1b[1m\x1b[32m✔ 终端与结构去噪直接节省\x1b[0m : \x1b[1m\x1b[32m${fmtNum(totalTokens)}\x1b[0m Tokens (${fmtBytes(totalChars)})`,
     `  \x1b[1m\x1b[33m✔ 插件直接去噪文本压缩率\x1b[0m : \x1b[1m\x1b[33m${ratio}%\x1b[0m [${bar(ratio, 16)}]`,
     `  \x1b[1m\x1b[32m✔ 折合预计减免费用\x1b[0m       : \x1b[1m\x1b[32m$${cost.toFixed(4)} USD\x1b[0m (基准单价 $1.00/1M Tokens)`,
+    ...(ctx.isContextBloated ? [
+      `  \x1b[1m${ctx.bloatLevel === 'severe' ? '\x1b[31m' : '\x1b[33m'}⚠ [历史上下文膨胀预警]\x1b[0m : ${ctx.bloatMessage}`
+    ] : []),
     `  \x1b[90m• 累计触发压缩拦截: ${fmtNum(stats.totalInvocations)} 次 | 当前会话轮次: ${fmtNum(ctx.plannerResponsesCount || 0)} | 实时更新于: ${new Date(stats.updatedAt).toLocaleTimeString()}\x1b[0m`,
     '',
     '\x1b[1m── 模块级贡献细分 (Module Contribution) ──────────────────────────────────\x1b[0m',
