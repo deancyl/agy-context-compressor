@@ -1,5 +1,5 @@
 /**
- * Card 4: llmtrim Cache-Zone Multi-Turn Session Memoization & KV Cache Lock for AGY (2.2)
+ * Card 4: llmtrim Cache-Zone Multi-Turn Session Memoization & KV Cache Lock for AGY (2.3)
  * 100% native Node.js zero dependencies.
  *
  * Implements:
@@ -17,26 +17,13 @@ const os = require('node:os');
 const MAX_MEMO_SESSIONS = 500;
 const MAX_MEMO_KEYS_PER_SESSION = 200;
 
-// In-memory bounded LRU memoization
 const sessionCompressionMemo = new Map();
 
-/**
- * Calculates SHA256 hash of content string.
- * @param {string} text
- * @returns {string}
- */
 function hashContent(text) {
   if (typeof text !== 'string') return '';
   return crypto.createHash('sha256').update(text).digest('hex').slice(0, 16);
 }
 
-/**
- * Retrieves memoized compressed text for a given session.
- * Implements True LRU refresh on both session and key levels.
- * @param {string} sessionId
- * @param {string} cacheKey
- * @returns {string|null}
- */
 function getMemo(sessionId, cacheKey) {
   if (!sessionId || !cacheKey) return null;
   const sMap = sessionCompressionMemo.get(sessionId);
@@ -53,12 +40,6 @@ function getMemo(sessionId, cacheKey) {
   return null;
 }
 
-/**
- * Stores compressed result into session memo with double-boundary LRU eviction.
- * @param {string} sessionId
- * @param {string} cacheKey
- * @param {string} compressed
- */
 function setMemo(sessionId, cacheKey, compressed) {
   if (!sessionId || !cacheKey || typeof compressed !== 'string') return;
 
@@ -82,10 +63,6 @@ function setMemo(sessionId, cacheKey, compressed) {
   sMap.set(cacheKey, compressed);
 }
 
-/**
- * Clears memo for a session or entire memo pool.
- * @param {string} [sessionId]
- */
 function clearSessionMemo(sessionId) {
   if (sessionId) {
     sessionCompressionMemo.delete(sessionId);
@@ -94,10 +71,6 @@ function clearSessionMemo(sessionId) {
   }
 }
 
-/**
- * Gets active memo stats.
- * @returns {object}
- */
 function getMemoStats() {
   let totalKeys = 0;
   for (const sMap of sessionCompressionMemo.values()) {
@@ -113,8 +86,7 @@ function getMemoStats() {
 
 /**
  * Analyzes an Antigravity transcript.jsonl file to extract live upstream KV Cache metrics.
- * Bloat detection is strictly tied to `latestTurnTokens` (the actual token size of the most recent turn),
- * preventing false-positive bloat alerts when historical turn count is high but current context is small.
+ * Bloat detection is strictly tied to `latestTurnTokens` (the actual token size of the most recent turn).
  * @param {string} transcriptPath
  * @returns {object}
  */
@@ -169,7 +141,6 @@ function analyzeTranscriptCache(transcriptPath) {
   }
 
   result.latestTurnTokens = latestTurnTokens;
-  // Strictly evaluate current active context window size (latestTurnTokens)
   result.isContextBloated = latestTurnTokens > 80000;
   if (latestTurnTokens > 120000) {
     result.bloatLevel = 'severe';
@@ -187,7 +158,8 @@ function analyzeTranscriptCache(transcriptPath) {
 }
 
 /**
- * Automatically discovers the most recently updated Antigravity conversation transcript.
+ * Automatically discovers the most recently updated Antigravity conversation transcript
+ * that contains active PLANNER_RESPONSE token metrics.
  * @returns {string|null}
  */
 function findLatestTranscriptPath() {
@@ -195,21 +167,34 @@ function findLatestTranscriptPath() {
     const brainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
     if (!fs.existsSync(brainDir)) return null;
     const entries = fs.readdirSync(brainDir);
-    let latestPath = null;
-    let latestMtime = 0;
+    const candidates = [];
+
     for (const entry of entries) {
       const p = path.join(brainDir, entry, '.system_generated', 'logs', 'transcript.jsonl');
       if (fs.existsSync(p)) {
         try {
           const st = fs.statSync(p);
-          if (st.size > 0 && st.mtimeMs > latestMtime) {
-            latestMtime = st.mtimeMs;
-            latestPath = p;
+          if (st.size > 0) {
+            candidates.push({ path: p, mtimeMs: st.mtimeMs });
           }
         } catch (_) {}
       }
     }
-    return latestPath;
+
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    // Check top 5 most recently modified transcripts for PLANNER_RESPONSE presence
+    for (const cand of candidates.slice(0, 5)) {
+      try {
+        const content = fs.readFileSync(cand.path, 'utf8');
+        if (content.includes('"PLANNER_RESPONSE"')) {
+          return cand.path;
+        }
+      } catch (_) {}
+    }
+
+    return candidates[0].path;
   } catch (_) {
     return null;
   }
@@ -218,11 +203,6 @@ function findLatestTranscriptPath() {
 let lastLiveMetrics = null;
 let lastLiveMetricsTime = 0;
 
-/**
- * Gets live Antigravity context and Prompt Cache metrics with a 2-second debounce cache.
- * @param {string|null} [customTranscriptPath=null]
- * @returns {object}
- */
 function getLiveAntigravityMetrics(customTranscriptPath = null) {
   const now = Date.now();
   if (!customTranscriptPath && lastLiveMetrics && (now - lastLiveMetricsTime < 2000)) {
@@ -238,13 +218,6 @@ function getLiveAntigravityMetrics(customTranscriptPath = null) {
   return metrics;
 }
 
-/**
- * Guard for PreInvocation payload:
- * Ensures all dynamic messages are marked ephemeral to prevent transcript prefix mutation,
- * locking Google Gemini upstream KV Cache.
- * @param {object} payload
- * @returns {object}
- */
 function handlePreInvocation(payload) {
   return {
     injectSteps: []

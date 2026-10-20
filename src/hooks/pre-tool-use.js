@@ -1,11 +1,12 @@
 /**
- * AGY PreToolUse Hook Implementation (2.2)
+ * AGY PreToolUse Hook Implementation (2.3)
  * Intercepts run_command, view_file, and grep_search.
  * Features:
  * 1. PowerShell escaping fixes & alias normalization.
  * 2. Process execution wrapper (agy-exec-wrapper) preserving exit codes 100% and UTF-8 Chinese encoding.
  * 3. Parameter window narrow-down for lockfiles, minified assets, and giant raw log files in view_file (0% source truncation).
- * 4. Automatic Card 6 (Aider AST Skeleton Indexing) & Card 7 (OpenCode-DCP Duplicate/Stale Read Tracking) on large source files.
+ * 4. Honest Slice-Aware Card 6 (Aider AST Outline Indexing) & Card 7 (OpenCode-DCP Stale/Duplicate Read Tracking)
+ *    without over-counting full fileSize on small slice reads.
  * 5. Automatic build/dependency noise exclusion on root grep_search.
  */
 
@@ -14,8 +15,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { fixPowerShellCommandEscaping } = require('../core/powershell');
 const { isLockfilePath } = require('../core/headroom');
-const { extractCodeSkeleton, extractSymbolOutline } = require('../core/skeleton');
-const { recordPowerShellFix, recordSavings } = require('../core/telemetry');
+const { extractSymbolOutline } = require('../core/skeleton');
+const { recordPowerShellFix, recordSavings, recordAiderOutlineIndexed } = require('../core/telemetry');
 
 const WRAPPER_PATH = path.resolve(__dirname, '../../bin/agy-exec-wrapper.js');
 const STREAM_FILTER_PATH = path.resolve(__dirname, 'stream-filter.js');
@@ -31,13 +32,13 @@ function getSessionReadsFilePath() {
 }
 
 /**
- * Tracks source file inspections for Card 6 (Aider AST Skeleton) and Card 7 (OpenCode-DCP Read Deduplication)
- * without ever truncating or modifying `view_file` arguments on source code.
+ * Tracks source file inspections for Card 6 (Aider AST Outline) and Card 7 (OpenCode-DCP Read Deduplication).
+ * Uses the ACTUAL slice character count (`actualReadChars`) rather than the entire file size when `StartLine`/`EndLine`
+ * are specified, preventing 500KB token inflation on 15-line slice inspections!
  */
 function trackSourceFileInspection(targetFile, args, fileSize, mtimeMs) {
   try {
     const base = path.basename(targetFile);
-    // Ignore synthetic unit test files
     if (/^agy-test-large-/i.test(base)) return;
 
     const ext = path.extname(base).toLowerCase();
@@ -55,32 +56,38 @@ function trackSourceFileInspection(targetFile, args, fileSize, mtimeMs) {
       }
     }
 
+    const raw = fs.readFileSync(targetFile, 'utf8');
+    const lines = raw.split(/\r?\n/);
+    const isSliced = Boolean(args.StartLine || args.EndLine);
+    const sLine = Math.max(1, args.StartLine || 1);
+    const eLine = args.EndLine ? Math.min(lines.length, args.EndLine) : lines.length;
+    const actualReadChars = isSliced
+      ? lines.slice(sLine - 1, eLine).join('\n').length
+      : raw.length;
+
     const normKey = path.resolve(targetFile).replace(/\\/g, '/').toLowerCase();
     const sliceKey = `${args.StartLine || 'full'}:${args.EndLine || 'full'}`;
     const prev = state.files[normKey];
     const now = Date.now();
 
     if (!prev || prev.mtimeMs !== mtimeMs) {
-      // If previously read at an older mtimeMs, the file was edited since the earlier read (DCP Stage 2: Supersede Writes)
-      if (prev && prev.mtimeMs && prev.mtimeMs !== mtimeMs) {
-        recordSavings('kompact', Math.round(fileSize * 0.65), fileSize, {
+      // If previously read at an older mtimeMs, only record DCP Stage 2 (Supersede Writes) based on the ACTUAL previous read size!
+      const prevReadChars = prev ? (prev.lastReadChars || 0) : 0;
+      if (prev && prev.mtimeMs && prev.mtimeMs !== mtimeMs && prevReadChars >= 2500) {
+        recordSavings('kompact', Math.round(prevReadChars * 0.75), prevReadChars, {
           filename: base,
           note: 'dcp_superseded_stale_read',
           prunedCount: 1
         });
       }
 
-      // Extract AST Code Skeleton & Symbol Outline (Card 6: Aider AST)
-      const raw = fs.readFileSync(targetFile, 'utf8');
-      const skeleton = extractCodeSkeleton(raw, targetFile);
-      const outline = extractSymbolOutline(raw, targetFile).slice(0, 12);
-      const savedBySkeleton = Math.max(0, raw.length - skeleton.length);
+      // Extract clean top-level AST Symbol Outline for PreInvocation guidance
+      const allSymbols = extractSymbolOutline(raw, targetFile);
+      const outline = allSymbols.slice(0, 30);
 
-      if (savedBySkeleton > 200) {
-        recordSavings('aider', savedBySkeleton, raw.length, {
-          filename: base,
-          type: 'code_skeleton'
-        });
+      // Increment Aider outline index counter without inflating 500KB savedChars on a 15-line slice read
+      if (typeof recordAiderOutlineIndexed === 'function' && !prev) {
+        recordAiderOutlineIndexed(base);
       }
 
       state.files[normKey] = {
@@ -88,19 +95,21 @@ function trackSourceFileInspection(targetFile, args, fileSize, mtimeMs) {
         mtimeMs,
         size: fileSize,
         lastSlice: sliceKey,
+        lastReadChars: actualReadChars,
         readCount: 1,
         lastReadAt: now,
         outline
       };
     } else {
-      // Unchanged file read again within 30 minutes
       prev.readCount = (prev.readCount || 1) + 1;
       const elapsedMs = now - (prev.lastReadAt || 0);
+      const prevReadChars = prev.lastReadChars || actualReadChars;
       prev.lastReadAt = now;
+      prev.lastReadChars = actualReadChars;
 
-      if (prev.lastSlice === sliceKey && sliceKey === 'full:full' && elapsedMs < 30 * 60 * 1000) {
-        // DCP Stage 1: Duplicate full-file read detected
-        recordSavings('kompact', Math.round(fileSize * 0.75), fileSize, {
+      // DCP Stage 1: Exact duplicate read of the same slice/file within 30 minutes
+      if (prev.lastSlice === sliceKey && prevReadChars >= 2000 && elapsedMs < 30 * 60 * 1000) {
+        recordSavings('kompact', Math.round(prevReadChars * 0.75), prevReadChars, {
           filename: base,
           note: 'dcp_dedup_repeated_read',
           prunedCount: 1
@@ -109,7 +118,6 @@ function trackSourceFileInspection(targetFile, args, fileSize, mtimeMs) {
       prev.lastSlice = sliceKey;
     }
 
-    // Keep state bounded to 40 most recent files
     const keys = Object.keys(state.files);
     if (keys.length > 40) {
       keys.sort((a, b) => (state.files[b].lastReadAt || 0) - (state.files[a].lastReadAt || 0));
@@ -194,7 +202,6 @@ function handlePreToolUse(payload, options = {}) {
         }
       } catch (_) {}
 
-      // Case A: Lockfiles, minified files, or giant (>15KB) raw log files without line boundaries
       if ((isLockfileOrMin || (isRawLogFile && fileSize > 15000)) && !args.StartLine && !args.EndLine) {
         if (fileSize > 0 && options.recordTelemetry !== false) {
           const estimatedAllowed = Math.min(fileSize, 200 * 35);
@@ -217,7 +224,6 @@ function handlePreToolUse(payload, options = {}) {
         };
       }
 
-      // Case B: Track AST Skeleton (Card 6) & Read Deduplication (Card 7) on large code files without truncating
       if (fileSize >= 6000 && options.recordTelemetry !== false) {
         trackSourceFileInspection(targetFile, args, fileSize, mtimeMs);
       }

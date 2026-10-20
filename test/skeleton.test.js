@@ -1,6 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { extractCodeSkeleton, extractPythonSkeleton, extractJavaScriptSkeleton, extractGoSkeleton } = require('../src/core/skeleton');
+const {
+  extractCodeSkeleton,
+  extractPythonSkeleton,
+  extractJavaScriptSkeleton,
+  extractGoSkeleton,
+  extractSymbolOutline
+} = require('../src/core/skeleton');
 
 test('extractPythonSkeleton: extracts classes, methods, docstrings, multiline signatures and omits bodies', () => {
   const py = `
@@ -104,7 +110,7 @@ func (s *Server) Start() error {
   assert.ok(!skeleton.includes('fmt.Println("Starting...")'));
 });
 
-test('extractJavaScriptSkeleton: handles arrow functions, function expressions, and multiline signatures with line spans', () => {
+test('extractJavaScriptSkeleton & extractSymbolOutline: preserves default object parameters (cfg = {}) and filters inner closures', () => {
   const code = `
 export const calculateScore = (user, scores) => {
   return scores.reduce((a, b) => a + b, 0);
@@ -113,6 +119,13 @@ export const calculateScore = (user, scores) => {
 const formatOutput = function(title, value) {
   return title + ': ' + value;
 };
+
+function configureAdapter(cfg = {}) {
+  const onError = (err) => {
+    console.error(err);
+  };
+  return cfg;
+}
 
 export async function complexOperation(
   id: string,
@@ -126,10 +139,16 @@ export async function complexOperation(
   const skeleton = extractJavaScriptSkeleton(code);
   assert.ok(skeleton.includes('export const calculateScore = (user, scores) =>'));
   assert.ok(skeleton.includes('const formatOutput = function(title, value)'));
+  assert.ok(skeleton.includes('function configureAdapter(cfg = {}) { /* ... */ }'));
   assert.ok(skeleton.includes('export async function complexOperation('));
   assert.ok(skeleton.includes('[Line 2-4]'));
   assert.ok(!skeleton.includes('return scores.reduce'));
   assert.ok(!skeleton.includes('const work = await doWork'));
+
+  const outline = extractSymbolOutline(code, 'adapter.js');
+  assert.ok(outline.some(s => s.includes('function configureAdapter(cfg = {})')));
+  // Inner closure `const onError` (indented inside configureAdapter) must not pollute outline
+  assert.ok(!outline.some(s => s.includes('onError')));
 });
 
 test('extractCodeSkeleton: extracts Rust, Java, and C++ signatures', () => {
